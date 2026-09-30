@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.slidewand.app</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>2</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1</string>
     <key>CFBundleExecutable</key>
     <string>SlideWand</string>
     <key>CFBundlePackageType</key>
@@ -23,6 +23,8 @@
     <key>NSCameraUsageDescription</key>
     <string>SlideWand uses the camera to detect hand gestures for changing slides. All processing happens on-device; no video ever leaves your Mac.</string>
     <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSUIElement</key>
     <true/>
 </dict>
 </plist>

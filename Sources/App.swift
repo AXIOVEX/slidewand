@@ -128,7 +128,7 @@ final class OverlayView: NSView {
             (s as NSString).draw(at: CGPoint(x: r.minX + 14, y: r.minY + 8), withAttributes: attrs)
         }
 
-        // Camera notice (denied / error)
+        // Camera notice (denied / error / waiting)
         if let notice = hud.notice {
             let attrs: [NSAttributedString.Key: Any] =
                 [.font: NSFont.systemFont(ofSize: 15), .foregroundColor: NSColor.white]
@@ -182,10 +182,23 @@ final class PreviewView: NSView {
     }
 }
 
-// MARK: - Controller: engine loop
+// MARK: - Controller: engine loop + public state for the test window / menu
 
 final class WandController: NSObject, HandTrackerDelegate {
     let view = NSView(frame: NSRect(x: 0, y: 0, width: 660, height: 560))
+
+    // Diagnostics surfaced to the test window and status menu.
+    var cameraRunning = false
+    var cameraError: String? = nil
+    var accessibilityOK = true
+    var gestureLabel = "starting…"
+    var fps: Double = 0
+    var nextCount = 0
+    var prevCount = 0
+    var lastAction: String? = nil
+    var lastActionT: Double = 0
+    var eventLog: [(Date, String)] = []
+    var notice: String? = nil
 
     private let tracker = VisionHandTracker()
     private let preview: PreviewView
@@ -198,11 +211,7 @@ final class WandController: NSObject, HandTrackerDelegate {
 
     private var fpsEma = 30.0
     private var prevT = ProcessInfo.processInfo.systemUptime
-    private var lastAction: String? = nil
-    private var lastActionT: Double = 0
-    private var notice: String? = nil
 
-    private var axOK = true
     private var axPrompted = false
     private var lastAxCheck: Double = 0
 
@@ -217,22 +226,33 @@ final class WandController: NSObject, HandTrackerDelegate {
         overlay.autoresizingMask = [.width, .height]
         view.addSubview(preview)
         view.addSubview(overlay)
-        axOK = KeySender.accessibilityTrusted()
+        accessibilityOK = KeySender.accessibilityTrusted()
+        render(points: nil) // draw immediately — don't wait for the first camera frame
     }
 
     func start() {
         tracker.delegate = self
         do {
             try tracker.start()
+            cameraRunning = true
+            cameraError = nil
+            notice = nil
             preview.applyMirroring()
         } catch {
-            notice = (error as NSError).localizedDescription
-            render(points: nil)
+            cameraRunning = false
+            cameraError = (error as NSError).localizedDescription
+            notice = cameraError
         }
+        render(points: nil)
     }
 
     func showCameraDenied() {
+        cameraRunning = false
         notice = "Camera access denied — enable it in System Settings → Privacy & Security → Camera."
+        render(points: nil)
+    }
+
+    func refreshHUD() {
         render(points: nil)
     }
 
@@ -243,13 +263,14 @@ final class WandController: NSObject, HandTrackerDelegate {
         let dt = now - prevT
         prevT = now
         if dt > 0 { fpsEma = 0.9 * fpsEma + 0.1 * (1.0 / dt) }
+        fps = fpsEma
 
         // Accessibility is re-checked periodically; macOS never prompts, so we
         // open the Settings page once and show a banner until granted.
         if now - lastAxCheck > 2.0 {
             lastAxCheck = now
-            axOK = KeySender.accessibilityTrusted()
-            if !axOK && !axPrompted {
+            accessibilityOK = KeySender.accessibilityTrusted()
+            if !accessibilityOK && !axPrompted {
                 axPrompted = true
                 KeySender.openAccessibilitySettings()
             }
@@ -265,13 +286,20 @@ final class WandController: NSObject, HandTrackerDelegate {
             trail.append(Pt(x: cx, y: cy))
             if trail.count > 24 { trail.removeFirst() }
         }
+        switch gesture {
+        case .openPalm: gestureLabel = "OPEN PALM — hold for NEXT"
+        case .fist: gestureLabel = "FIST — hold for PREV"
+        case .unknown: gestureLabel = handOK ? "wave quickly ← / →" : "show your hand to the camera"
+        }
 
         var action: String? = nil
+        var source = ""
         let dir: SwipeDir? = handOK
             ? swipe.update(t: now, present: true, x: cx, y: cy)
             : swipe.update(t: now, present: false)
         if let dir = dir, gate.ready(now) {
             action = (dir == .right) ? "NEXT" : "PREV"
+            source = dir == .right ? "swipe right" : "swipe left"
             gate.fire(now)
             swipe.reset()
             hold.reset()
@@ -286,6 +314,7 @@ final class WandController: NSObject, HandTrackerDelegate {
             progress = p
             if let fired = fired, gate.ready(now) {
                 action = fired
+                source = fired == "NEXT" ? "hold palm" : "hold fist"
                 gate.fire(now)
                 swipe.reset()
             }
@@ -297,6 +326,11 @@ final class WandController: NSObject, HandTrackerDelegate {
         if let action = action {
             lastAction = action
             lastActionT = now
+            if action == "NEXT" { nextCount += 1 } else { prevCount += 1 }
+            let fmt = DateFormatter()
+            fmt.dateFormat = "HH:mm:ss"
+            eventLog.append((Date(), "\(fmt.string(from: Date()))  \(source) → \(action)"))
+            if eventLog.count > 60 { eventLog.removeFirst(eventLog.count - 60) }
             KeySender.press(action == "NEXT" ? KeySender.keyNext : KeySender.keyPrev)
         }
 
@@ -317,39 +351,167 @@ final class WandController: NSObject, HandTrackerDelegate {
         hud.fps = fpsEma
         hud.lastAction = lastAction
         hud.lastActionAge = actionAge
-        hud.accessibilityOK = axOK
+        hud.accessibilityOK = accessibilityOK
         hud.notice = notice
         overlay.render(hud)
     }
 }
 
-// MARK: - App bootstrap
+// MARK: - Gesture test window
+
+final class TestWindowController: NSWindowController {
+    private weak var wand: WandController?
+    private var timer: Timer?
+    private var lastSeenLogCount = -1
+
+    private let stateLabel = NSTextField(labelWithString: "")
+    private let countLabel = NSTextField(labelWithString: "")
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let logView = NSTextView()
+
+    init(wand: WandController) {
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 400),
+                           styleMask: [.titled, .closable, .miniaturizable],
+                           backing: .buffered,
+                           defer: false)
+        super.init(window: win)
+        self.wand = wand
+        win.title = "SlideWand — Gesture Test"
+        win.isReleasedWhenClosed = false
+
+        let content = win.contentView!
+
+        stateLabel.frame = NSRect(x: 20, y: 322, width: 400, height: 52)
+        stateLabel.font = NSFont.boldSystemFont(ofSize: 28)
+        stateLabel.alignment = .center
+        content.addSubview(stateLabel)
+
+        countLabel.frame = NSRect(x: 20, y: 294, width: 400, height: 22)
+        countLabel.font = NSFont.systemFont(ofSize: 13)
+        countLabel.alignment = .center
+        countLabel.textColor = .secondaryLabelColor
+        content.addSubview(countLabel)
+
+        statusLabel.frame = NSRect(x: 20, y: 270, width: 400, height: 20)
+        statusLabel.font = NSFont.systemFont(ofSize: 12)
+        statusLabel.alignment = .center
+        content.addSubview(statusLabel)
+
+        let logTitle = NSTextField(labelWithString: "Event log — triggers send real arrow keys to the front app:")
+        logTitle.frame = NSRect(x: 20, y: 248, width: 400, height: 16)
+        logTitle.font = NSFont.systemFont(ofSize: 11)
+        logTitle.textColor = .secondaryLabelColor
+        content.addSubview(logTitle)
+
+        logView.frame = NSRect(x: 0, y: 0, width: 400, height: 220)
+        logView.isEditable = false
+        logView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        let scroll = NSScrollView(frame: NSRect(x: 20, y: 20, width: 400, height: 222))
+        scroll.documentView = logView
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        content.addSubview(scroll)
+
+        logView.string = """
+            Wave right / left — or hold an open palm / fist for 1s.
+            Each trigger below also pressed a real arrow key.
+            ————————————————————————————————
+            """
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    func show() {
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        lastSeenLogCount = -1
+        if timer == nil {
+            timer = Timer.scheduledTimer(timeInterval: 0.25, target: self,
+                                         selector: #selector(tick),
+                                         userInfo: nil, repeats: true)
+        }
+        tick()
+    }
+
+    @objc private func tick() {
+        guard let win = window, win.isVisible, let wand = wand else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let age = now - wand.lastActionT
+        if let a = wand.lastAction, age < 1.2 {
+            stateLabel.stringValue = a == "NEXT" ? "NEXT  →" : "←  PREV"
+            stateLabel.textColor = .systemGreen
+        } else {
+            stateLabel.stringValue = wand.gestureLabel
+            stateLabel.textColor = .labelColor
+        }
+        countLabel.stringValue =
+            "Next: \(wand.nextCount)    Prev: \(wand.prevCount)    \(String(format: "%.0f", wand.fps)) fps"
+
+        var statusParts: [String] = []
+        if wand.cameraRunning {
+            statusParts.append("Camera: ON")
+        } else if wand.cameraError != nil {
+            statusParts.append("Camera: OFF")
+        } else {
+            statusParts.append("Camera: starting…")
+        }
+        statusParts.append(wand.accessibilityOK ? "Accessibility: granted" : "Accessibility: BLOCKED — keys won't send")
+        statusLabel.stringValue = statusParts.joined(separator: "   ·   ")
+        statusLabel.textColor = (!wand.cameraRunning || !wand.accessibilityOK) ? .systemRed : .systemGreen
+
+        if wand.eventLog.count != lastSeenLogCount {
+            lastSeenLogCount = wand.eventLog.count
+            var s = logView.string
+            // Rebuild from the stored hint + events to stay in sync.
+            let hintEnd = s.range(of: "———")?.upperBound
+            let hint = hintEnd.map { String(s[..<$0]) + "\n" } ?? ""
+            s = hint + wand.eventLog.map { $0.1 }.joined(separator: "\n")
+            if !wand.eventLog.isEmpty { s += "\n" }
+            logView.string = s
+            logView.scrollToEndOfDocument(nil)
+        }
+    }
+}
+
+// MARK: - App bootstrap: menu-bar app + preview window + test window
 
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var window: NSWindow!
+    private var statusItem: NSStatusItem!
+    private var statusLineItem: NSMenuItem!
+    private var previewItem: NSMenuItem!
+    private var previewWindow: NSWindow!
     private var controller: WandController!
+    private var testController: TestWindowController!
+    private var menuTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
-        buildMenu()
-
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
-                          styleMask: [.titled, .closable, .miniaturizable],
-                          backing: .buffered,
-                          defer: false)
-        window.title = "SlideWand — wave to change slides"
-        window.center()
+        NSApp.setActivationPolicy(.accessory)
+        buildStatusItem()
 
         controller = WandController()
-        window.contentView = controller.view
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        testController = TestWindowController(wand: controller)
+
+        previewWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
+                                styleMask: [.titled, .closable, .miniaturizable],
+                                backing: .buffered,
+                                defer: false)
+        previewWindow.title = "SlideWand — camera preview"
+        previewWindow.center()
+        previewWindow.contentView = controller.view
+        previewWindow.makeKeyAndOrderFront(nil)
 
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             controller.start()
         case .notDetermined:
+            controller.notice = "Waiting for camera permission…"
+            controller.refreshHUD()
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async {
                     if granted {
@@ -364,21 +526,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         @unknown default:
             controller.showCameraDenied()
         }
+
+        menuTimer = Timer.scheduledTimer(timeInterval: 1.0, target: self,
+                                         selector: #selector(updateMenu),
+                                         userInfo: nil, repeats: true)
+        updateMenu()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true
+        return false // menu-bar app: closing windows doesn't quit
     }
 
-    private func buildMenu() {
+    private func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = statusItem.button {
+            if let img = NSImage(systemSymbolName: "hand.wave", accessibilityDescription: "SlideWand") {
+                button.image = img
+            } else {
+                button.title = "🪄"
+            }
+        }
         let menu = NSMenu()
-        let appItem = NSMenuItem()
-        menu.addItem(appItem)
-        let appMenu = NSMenu()
-        appItem.submenu = appMenu
-        appMenu.addItem(NSMenuItem(title: "Quit SlideWand",
-                                  action: #selector(NSApplication.terminate(_:)),
-                                  keyEquivalent: "q"))
-        NSApp.mainMenu = menu
+        statusLineItem = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
+        statusLineItem.isEnabled = false
+        menu.addItem(statusLineItem)
+        menu.addItem(NSMenuItem(title: "Open Gesture Test…", action: #selector(openTest), keyEquivalent: "t"))
+        previewItem = NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: "p")
+        menu.addItem(previewItem)
+        menu.addItem(NSMenuItem.separatorItem())
+        menu.addItem(NSMenuItem(title: "Quit SlideWand", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        statusItem.menu = menu
+    }
+
+    @objc private func updateMenu() {
+        guard controller != nil else { return }
+        let cam: String
+        if controller.cameraRunning {
+            cam = "Camera on"
+        } else if controller.cameraError != nil {
+            cam = "Camera off"
+        } else {
+            cam = "Camera starting…"
+        }
+        let ax = controller.accessibilityOK ? "keys sending" : "ACCESSIBILITY BLOCKED"
+        statusLineItem.title = "\(cam) · \(ax)"
+        if let button = statusItem.button {
+            button.contentTintColor = (!controller.cameraRunning || !controller.accessibilityOK)
+                ? .systemRed : nil
+        }
+    }
+
+    @objc private func openTest() {
+        testController.show()
+    }
+
+    @objc private func togglePreview() {
+        let vis = previewWindow.isVisible
+        previewWindow.setIsVisible(!vis)
+        previewItem.title = vis ? "Show Camera Preview" : "Hide Camera Preview"
     }
 }

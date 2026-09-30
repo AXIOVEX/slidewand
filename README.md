@@ -7,11 +7,23 @@ A native macOS app (Swift + Apple's Vision framework). Hand tracking runs entire
 ## Install (30 seconds)
 
 1. Download **`SlideWand-macos.zip`** from the [latest release](../../releases/latest) and unzip it.
-2. **Right-click `SlideWand.app` → Open** (one time only — the app isn't Apple-notarized yet, so Gatekeeper needs this manual OK on first launch; after that it opens with a normal double-click).
+2. **Right-click `SlideWand.app` → Open** (one time only — the app isn't Apple-notarized yet, so Gatekeeper needs this manual OK on first launch; after that it opens with a normal double-click). If macOS still refuses, run once in Terminal: `xattr -dr com.apple.quarantine /path/to/SlideWand.app`
 3. Grant **Camera** access when prompted.
 4. Grant **Accessibility**: System Settings → Privacy & Security → Accessibility → add **SlideWand**. macOS never prompts for this one — the app opens that Settings page for you on first run and shows a banner until it's granted. It starts working the moment you toggle it; no restart needed.
 
-Then start your slideshow — Keynote, PowerPoint, Google Slides, a PDF, anything that advances with arrow keys — make sure it's the focused window, and wave. A preview window shows what the camera sees: your hand skeleton, a swipe trail, and a progress ring while a hold is charging.
+SlideWand lives in your **menu bar** (👋 icon) — no Dock icon, no clutter. The camera preview window opens on launch so you can see what it sees; close it and the app keeps running from the menu bar.
+
+## Testing it
+
+Open **👋 → Open Gesture Test…** from the menu bar. The test window shows:
+
+- your live hand state ("show your hand to the camera", "OPEN PALM — hold for NEXT", …)
+- big **NEXT →** / **← PREV** flashes every time a gesture fires
+- running Next/Prev counters and an event log with timestamps
+
+Every trigger also presses a real arrow key, so you can test with any app focused — or just watch the counters move.
+
+Then start your slideshow — Keynote, PowerPoint, Google Slides, a PDF, anything that advances with arrow keys — make sure it's the focused window, and wave.
 
 ## Gestures
 
