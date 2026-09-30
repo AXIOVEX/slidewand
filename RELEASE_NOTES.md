@@ -1,4 +1,29 @@
-# SlideWand v0.2.2
+# SlideWand v0.2.3
+
+## What's new in v0.2.3
+
+- **Calibration step 1 is now click-to-pick — no more aiming at a ring.**
+  The old flow asked you to hold the tip on a glowing ring until the color
+  "steadied", but handheld jitter meant the steadiness check almost never
+  passed, with no feedback about why. Now: hold the wand tip-up in the dashed
+  box and **click the tip directly in the camera preview**. The live yellow
+  dot shows exactly what the app locked onto — click again to re-pick, then
+  hold still for a second. Steps 2–3 (tilt left / tilt right) are unchanged.
+- **Fixed a crash on quit.** The 1-second menu timer could fire while the app
+  was tearing down (EXC_BAD_ACCESS inside the menu refresh). The timer now
+  stops the moment termination is requested, and the refresh bails out during
+  teardown. Quitting is clean.
+- **Accessibility permission survives updates now.** Every build used to be
+  ad-hoc signed, which gave it a new identity each time — macOS silently tied
+  your grant to the old build, so the red banner kept coming back. Releases
+  are now signed with one persistent SlideWand identity, so the grant carries
+  over. If this update still shows the banner, remove SlideWand with – and
+  re-add it with + in Settings → Privacy & Security → Accessibility — that's
+  the last time you'll need to. (Not Apple-notarized: first launch still
+  needs right-click → Open.)
+- The app also detects the stale-grant case specifically: if you granted
+  permission before and an update broke it, the re-grant walkthrough says so
+  plainly instead of sounding like a first-time setup.
 
 ## What's new in v0.2.2
 

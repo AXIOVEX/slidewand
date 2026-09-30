@@ -19,6 +19,40 @@ jobs:
       - name: Swift version
         run: swiftc --version
 
+      - name: Require signing identity for releases
+        # Ad-hoc signatures change every build, which invalidates the user's
+        # Accessibility grant each update. Releases must use the persistent
+        # self-signed "SlideWand" identity (repo secrets SLIDEWAND_SIGN_P12_B64
+        # / SLIDEWAND_SIGN_PASSWORD) so the grant survives updates.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if [ -z "${{ secrets.SLIDEWAND_SIGN_P12_B64 }}" ]; then
+            echo "::error::Release builds require the SLIDEWAND_SIGN_P12_B64 secret (stable signing identity)."
+            exit 1
+          fi
+
+      - name: Import signing certificate
+        if: ${{ secrets.SLIDEWAND_SIGN_P12_B64 != '' }}
+        env:
+          SIGN_P12_B64: ${{ secrets.SLIDEWAND_SIGN_P12_B64 }}
+          SIGN_PASSWORD: ${{ secrets.SLIDEWAND_SIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$SIGN_P12_B64" | base64 --decode > /tmp/slidewand-sign.p12
+          KC=/tmp/slidewand-sign.keychain-db
+          security create-keychain -p "$SIGN_PASSWORD" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$SIGN_PASSWORD" "$KC"
+          security import /tmp/slidewand-sign.p12 -k "$KC" -P "$SIGN_PASSWORD" \
+            -T /usr/bin/codesign
+          security list-keychains -d user -s "$KC" \
+            $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$SIGN_PASSWORD" "$KC"
+          rm /tmp/slidewand-sign.p12
+          security find-identity -v -p codesigning "$KC"
+          echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
       - name: Build binary
         run: |
           set -euo pipefail
@@ -40,7 +74,18 @@ jobs:
             echo "arm64-only binary (x86_64 cross-compile unavailable on this runner)"
           fi
           cp Info.plist build/SlideWand.app/Contents/Info.plist
-          codesign --force --sign - build/SlideWand.app
+          if [ -n "${SIGN_KEYCHAIN:-}" ]; then
+            # Stable self-signed identity: keeps the Accessibility grant valid
+            # across updates. (Not Apple-notarized; first launch still needs
+            # right-click → Open.)
+            codesign --force --sign "SlideWand" --keychain "$SIGN_KEYCHAIN" \
+              build/SlideWand.app
+            echo "Signed with the persistent SlideWand identity"
+          else
+            codesign --force --sign - build/SlideWand.app
+            echo "WARNING: ad-hoc signed (no signing secrets) — Accessibility grant will not survive updates"
+          fi
+          codesign -dv --verbose=4 build/SlideWand.app 2>&1 | grep -E "Authority|Identifier"
           file build/SlideWand.app/Contents/MacOS/SlideWand
 
       - name: Package

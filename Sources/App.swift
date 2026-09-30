@@ -26,7 +26,6 @@ struct HudState {
     var calibrationHint: String = ""
     var calStep: Int = 0 // 0 idle, 1 find, 2 rotateLeft, 3 rotateRight
     var calBox: (x0: Double, y0: Double, x1: Double, y1: Double)? = nil
-    var calRing: Pt? = nil        // step-1 target ring: put the wand's tip here
     var acquiring: Bool = false   // step 1 still looking for the tip (vs. holding steady)
 }
 
@@ -190,12 +189,16 @@ final class OverlayView: NSView {
 
         // Calibration guidance overlay: per-step instructions on the video
         if hud.calibrating {
-            NSColor.black.withAlphaComponent(0.5).setFill()
+            // Step 1 needs the wand clearly visible — the user clicks its tip.
+            let dim: CGFloat = hud.calStep == 1 ? 0.25 : 0.5
+            NSColor.black.withAlphaComponent(dim).setFill()
             NSBezierPath(rect: NSRect(x: vx, y: vy, width: vw, height: vh)).fill()
 
-            if hud.calStep == 1, let box = hud.calBox, let ring = hud.calRing {
-                // Step 1: target box with a wand illustration — put YOUR wand's
-                // tip exactly on the glowing ring, matching the picture.
+            if hud.calStep == 1, let box = hud.calBox {
+                // Step 1: target box with a faint upright wand as a placement
+                // cue. The user CLICKS the wand tip in the preview — the live
+                // yellow dot then shows what the app locked onto. Clicking
+                // again re-picks.
                 let bx = vx + CGFloat(box.x0) * vw, byTop = vy + CGFloat(box.y0) * vh
                 let bw = CGFloat(box.x1 - box.x0) * vw, bh = CGFloat(box.y1 - box.y0) * vh
                 let by = byTop - bh
@@ -205,22 +208,21 @@ final class OverlayView: NSView {
                 rect.lineWidth = 2.5
                 rect.setLineDash([10, 7], count: 2, phase: 0)
                 rect.stroke()
-                // Wand illustration: tip resting on the ring, shaft continuing
-                // down out of the box (you're holding the bottom).
-                let rx = X(ring.x), ry = Y(ring.y)
-                let figLen = (by + bh - ry) + 70
-                drawWandFigure(anchorX: rx, anchorY: ry, length: figLen, width: 26, tilt: 0)
-                // Pulsing target ring — green once the tip is acquired.
-                let now = ProcessInfo.processInfo.systemUptime
-                let pulse: CGFloat = 13 + 3 * CGFloat(sin(now * 5))
-                (hud.acquiring ? NSColor.systemYellow : NSColor.systemGreen).setStroke()
-                let rr = NSBezierPath(ovalIn: NSRect(x: rx - pulse, y: ry - pulse,
-                                                     width: pulse * 2, height: pulse * 2))
-                rr.lineWidth = 3
-                rr.stroke()
+                // Faint upright wand: hold your wand like the picture, tip up.
+                drawWandFigure(anchorX: bx + bw / 2, anchorY: by + bh - 14,
+                               length: bh - 28, width: 26, tilt: 0,
+                               basePivot: true, alpha: 0.30)
+                // Live pick marker: where the user clicked (pulsing yellow).
+                if let tip = hud.wandTip, hud.wandVisible {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let pulse: CGFloat = 11 + 3 * CGFloat(sin(now * 6))
+                    NSColor.systemYellow.setFill()
+                    NSBezierPath(ovalIn: NSRect(x: X(tip.x) - pulse, y: Y(tip.y) - pulse,
+                                                 width: pulse * 2, height: pulse * 2)).fill()
+                }
                 text(hud.calibrationHint, at: CGPoint(x: vx + 20, y: vy + vh - 30),
                      size: 14, color: .white, bold: true)
-                text("Match the picture: tip on the ring, then hold still.",
+                text("Click precisely on the tip — click again to re-pick.",
                      at: CGPoint(x: vx + 20, y: vy + vh - 80), size: 12, color: .lightGray)
                 drawCalProgress(at: CGPoint(x: vx + 20, y: vy + vh - 58), width: vw - 40)
             } else if hud.calStep == 2 || hud.calStep == 3 {
@@ -348,8 +350,23 @@ final class PreviewView: NSView {
 
 // MARK: - Controller: engine loop + public state for the test window / menu
 
+// A plain NSView subclass that forwards mouse clicks. The calibration
+// overlay sits on top of the preview and doesn't handle mouseDown, so clicks
+// propagate up to this view — that is how step 1 of calibration lets the
+// user click the wand tip directly in the camera preview.
+final class ClickView: NSView {
+    var onClick: ((NSPoint) -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        onClick?(p)
+    }
+}
+
 final class WandController: NSObject, HandTrackerDelegate {
-    let view = NSView(frame: NSRect(x: 0, y: 0, width: 660, height: 560))
+    let view: ClickView = {
+        let v = ClickView(frame: NSRect(x: 0, y: 0, width: 660, height: 560))
+        return v
+    }()
 
     // Diagnostics surfaced to the test window and status menu.
     var cameraRunning = false
@@ -405,10 +422,12 @@ final class WandController: NSObject, HandTrackerDelegate {
     private var stepMinX = Double.greatestFiniteMagnitude
     private var stepMaxX = -Double.greatestFiniteMagnitude
     private var findStable: [(Pt, Double)] = []
-    // Step-1 acquisition: sample the ring color until we're sure the tip is there.
-    private var acquired = false
-    private var acqSamples: [(r: Double, g: Double, b: Double, t: Double)] = []
-    private var acqContrastSince: Double? = nil
+    // Step-1 tip pick: the user CLICKS the tip in the camera preview. The
+    // old approach (hold the tip on a glowing ring until the color steadied)
+    // never worked in practice — handheld jitter kept the steadiness gate
+    // from passing and there was no feedback about why. A click is exact,
+    // instant, and self-evident.
+    private var acquired = false   // true once the user has picked the tip
 
     /// Target box for calibration step 1 (normalized, top-left origin):
     /// the top third of the frame, centered.
@@ -428,6 +447,9 @@ final class WandController: NSObject, HandTrackerDelegate {
         overlay.autoresizingMask = [.width, .height]
         view.addSubview(preview)
         view.addSubview(overlay)
+        // Step 1 of calibration: the user clicks the wand tip in the preview.
+        // The overlay doesn't consume mouseDown, so the click reaches this view.
+        view.onClick = { [weak self] p in self?.viewClicked(p) }
         accessibilityOK = KeySender.accessibilityTrusted()
         if let c = calibration { tipProfile = (r: c.red, g: c.green, b: c.blue) }
         render(points: nil) // draw immediately — don't wait for the first camera frame
@@ -474,12 +496,8 @@ final class WandController: NSObject, HandTrackerDelegate {
         }
     }
 
-    /// The step-1 target ring: the user puts the wand's tip exactly here.
-    /// Top-center of the target box.
-    var calRing: Pt {
-        Pt(x: (calBox.x0 + calBox.x1) / 2,
-           y: calBox.y0 + 0.20 * (calBox.y1 - calBox.y0))
-    }
+    // (Step 1 used to have a target ring the tip had to sit on; it now uses
+    // a direct click — see viewClicked/pickTip.)
 
     /// Begin the guided calibration: find the wand, rotate left, rotate right.
     func startCalibration() {
@@ -487,12 +505,13 @@ final class WandController: NSObject, HandTrackerDelegate {
         calibrationMessage = nil
         findStable.removeAll()
         acquired = false
-        acqSamples.removeAll()
-        acqContrastSince = nil
         tipProfile = nil
         wandSmooth = nil; wandTip = nil; wandVisible = false; wandSnapCorners = nil
         gestureLabel = "calibrating — follow the steps…"
         swipe.reset(); hold.reset(); trail.removeAll()
+        // Step 1 needs the preview front and center: the user clicks the tip there.
+        view.window?.setIsVisible(true)
+        view.window?.makeKeyAndOrderFront(nil)
     }
 
     /// Live hint for the calibration window + preview overlay.
@@ -500,9 +519,9 @@ final class WandController: NSObject, HandTrackerDelegate {
         switch calStep {
         case .idle: return ""
         case .find:
-            if !acquired { return "Put your wand's TIP on the glowing ring" }
+            if !acquired { return "Click the TIP of your wand in the camera preview" }
             if let tip = wandTip, wandVisible, calBoxContains(tip) { return "Got it — hold still…" }
-            return "Keep the tip on the ring…"
+            return "I lost the tip — click it again in the preview"
         case .rotateLeft:
             return stepMinX < (stepAnchor?.x ?? 1) - 0.08
                 ? "Good — bring it back to center…"
@@ -549,57 +568,30 @@ final class WandController: NSObject, HandTrackerDelegate {
         sqrt(pow(a.r - b.r, 2) + pow(a.g - b.g, 2) + pow(a.b - b.b, 2))
     }
 
-    /// Step-1 acquisition, run every frame until the tip is found. Samples the
-    /// color at the target ring and its surroundings: when something
-    /// tip-colored sits on the ring steadily (or a rectangle tip lands near
-    /// it), we lock on. Shape-agnostic — works for gnarly, twisted wands.
-    private func updateAcquisition(wands: [WandCandidate], now: Double) {
-        let ring = calRing
-        // Fast path: a rectangle tip right on the ring.
-        if let near = wands.min(by: { hypot($0.tip.x - ring.x, $0.tip.y - ring.y)
-                                     < hypot($1.tip.x - ring.x, $1.tip.y - ring.y) }),
-           hypot(near.tip.x - ring.x, near.tip.y - ring.y) < 0.09 {
-            tipProfile = (near.tipColor.r, near.tipColor.g, near.tipColor.b)
-            wandSmooth = near.tip
-            acquired = true
-            return
-        }
-        guard let rc = tracker.sampleColor(at: ring) else { return }
-        let ringC = (r: rc.0, g: rc.1, b: rc.2)
-        // Surrounding patches: is something sitting on the ring, or just background?
-        let off = 0.07
-        var sR = 0.0, sG = 0.0, sB = 0.0, sN = 0.0
-        for (dx, dy) in [(-off, 0), (off, 0), (0, -off), (0, off)] {
-            let p = Pt(x: ring.x + dx, y: ring.y + dy)
-            if let c = tracker.sampleColor(at: p) {
-                sR += c.0; sG += c.1; sB += c.2; sN += 1
-            }
-        }
-        guard sN > 0 else { return }
-        let surround = (r: sR / sN, g: sG / sN, b: sB / sN)
-        let contrast = colorDist3(ringC, surround)
-        acqSamples.append((r: ringC.r, g: ringC.g, b: ringC.b, t: now))
-        acqSamples.removeAll { now - $0.t > 2.5 }
-        if contrast > 0.12 {
-            if acqContrastSince == nil { acqContrastSince = now }
-        } else {
-            acqContrastSince = nil
-        }
-        guard acqSamples.count >= 8 else { return }
-        let n = Double(acqSamples.count)
-        let mean = (r: acqSamples.map { $0.r }.reduce(0, +) / n,
-                    g: acqSamples.map { $0.g }.reduce(0, +) / n,
-                    b: acqSamples.map { $0.b }.reduce(0, +) / n)
-        let variance = acqSamples.map {
-            colorDist3((r: $0.r, g: $0.g, b: $0.b), mean)
-        }.reduce(0, +) / n
-        let stable = variance < 0.05
-        let contrastHeld = (acqContrastSince.map { now - $0 > 0.4 } ?? false) && stable
-        if contrastHeld {
-            tipProfile = mean
-            wandSmooth = ring
-            acquired = true
-        }
+    /// Step-1 tip pick: the user clicks the wand tip in the camera preview.
+    /// Clicks arrive in the view's own coordinates (origin bottom-left, y up);
+    /// the preview video sits at (10,70,640,480) in that space. Engine
+    /// coordinates are normalized with y DOWN from the top of the video.
+    /// Only active during step 1 — clicks at any other time do nothing.
+    private func viewClicked(_ p: NSPoint) {
+        guard calStep == .find else { return }
+        let nx = (p.x - 10) / 640
+        let ny = (550 - p.y) / 480
+        guard nx >= 0, nx <= 1, ny >= 0, ny <= 1 else { return } // outside the video
+        pickTip(at: Pt(x: nx, y: ny))
+    }
+
+    /// Learn the tip's appearance from the clicked point and start tracking
+    /// it. Re-clicking re-picks (and resets the hold-still timer), so a
+    /// mis-click is fixed by simply clicking again.
+    private func pickTip(at pt: Pt) {
+        guard let c = tracker.sampleColor(at: pt) else { return }
+        tipProfile = (r: c.0, g: c.1, b: c.2)
+        acquired = true
+        wandSmooth = pt
+        wandLastSeen = ProcessInfo.processInfo.systemUptime
+        findStable.removeAll()
+        render(points: nil)
     }
 
     /// Called every frame while calibrating. Advances the guided steps using
@@ -611,7 +603,7 @@ final class WandController: NSObject, HandTrackerDelegate {
         case .idle:
             break
         case .find:
-            if !acquired { break } // updateAcquisition runs inside updateWandTracking
+            if !acquired { break } // tip not picked yet — see viewClicked/pickTip
             if let tip = wandTip, wandVisible, calBoxContains(tip) {
                 findStable.append((tip, now))
                 findStable.removeAll { now - $0.1 > 1.2 }
@@ -671,7 +663,8 @@ final class WandController: NSObject, HandTrackerDelegate {
     /// rectangle candidates refine the tip when their geometry agrees.
     private func updateWandTracking(wands: [WandCandidate], now: Double) {
         if calStep == .find && !acquired {
-            updateAcquisition(wands: wands, now: now)
+            // Step 1 before the user clicks: no profile yet, nothing to track.
+            // (Tip selection is the click itself — see viewClicked/pickTip.)
             updateRectROI()
             wandVisible = false
             return
@@ -793,7 +786,13 @@ final class WandController: NSObject, HandTrackerDelegate {
         if now - lastAxCheck > 2.0 {
             lastAxCheck = now
             accessibilityOK = KeySender.accessibilityTrusted()
-            if !accessibilityOK && !axPrompted {
+            if accessibilityOK {
+                // Remember that the grant once applied. A later false reading
+                // then means the grant went STALE (a new build with a new
+                // signature), not that the user never granted it — and the
+                // fix is remove-and-re-add, not a first-time grant.
+                UserDefaults.standard.set(true, forKey: "SlideWand.wasAccessibilityTrusted")
+            } else if !axPrompted {
                 axPrompted = true
                 KeySender.openAccessibilitySettings()
             }
@@ -905,7 +904,6 @@ final class WandController: NSObject, HandTrackerDelegate {
         hud.calibrationHint = calibrationHint
         hud.calStep = calStep == .find ? 1 : calStep == .rotateLeft ? 2 : calStep == .rotateRight ? 3 : 0
         hud.calBox = (calBox.x0, calBox.y0, calBox.x1, calBox.y1)
-        hud.calRing = calStep == .find ? calRing : nil
         hud.acquiring = calStep == .find && !acquired
         overlay.render(hud)
     }
@@ -1073,8 +1071,9 @@ final class CalibrationWindowController: NSWindowController {
 
         let help = NSTextField(wrappingLabelWithString:
             "SlideWand tracks your physical wand — the stick itself, not your hand. " +
-            "The guided steps photograph the tip to learn its shape and color, " +
-            "then watch you rotate it so tracking stays locked while it moves. " +
+            "Step 1: hold the wand tip-up in the dashed box and CLICK the tip in the " +
+            "camera preview to teach its color (click again to re-pick), then hold still. " +
+            "Steps 2–3 watch you tilt it left and right so tracking stays locked while it moves. " +
             "Watch the camera preview while you do it.")
         help.frame = NSRect(x: 20, y: 188, width: 400, height: 74)
         view.addSubview(help)
@@ -1305,12 +1304,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var transientStatus: String? = nil
     private var menuTimer: Timer?
     private var tickCount = 0
+    // Set the moment termination is requested. The 1s menu timer must never
+    // fire while AppKit tears the app down: a tick landing mid-teardown
+    // crashed on quit (EXC_BAD_ACCESS inside updateMenu via objc_msgSend).
+    private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v0.2.2)")
+        Log.line("didFinishLaunching: start (v0.2.3)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
@@ -1367,13 +1370,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.showCameraDenied()
         }
 
-        menuTimer = Timer.scheduledTimer(timeInterval: 1.0, target: self,
-                                         selector: #selector(updateMenu),
-                                         userInfo: nil, repeats: true)
+        // Weak closure (not target/selector): the timer can never keep the
+        // delegate alive or message it after teardown has begun.
+        menuTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updateMenu()
+        }
         updateMenu()
         Updater.shared.checkAutomatically()
         print("[SlideWand] startup complete")
         Log.line("startup complete")
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Stop the repeating menu timer BEFORE AppKit starts tearing the UI
+        // down. applicationWillTerminate runs too late: a timer tick can
+        // already be queued and fire on half-deallocated objects.
+        terminating = true
+        menuTimer?.invalidate()
+        menuTimer = nil
+        return .terminateNow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -1509,14 +1524,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.refreshHUD()
             return
         }
-        // Still untrusted: the usual cause is macOS tying the grant to the
-        // previous build's signature — the switch looks on but no longer
-        // applies. Walk the user through the remove-and-re-add fix.
+        // Still untrusted. Two cases: the user never granted it, or the grant
+        // went stale because it was tied to a previous build's signature (the
+        // switch still looks on but no longer applies). From v0.2.3 on,
+        // releases keep one stable signing identity, so a re-add is the last.
+        let stale = !controller.accessibilityOK &&
+            UserDefaults.standard.bool(forKey: "SlideWand.wasAccessibilityTrusted")
         let alert = NSAlert()
-        alert.messageText = "SlideWand still isn't trusted"
+        alert.messageText = stale ? "Permission lost after the update"
+                                  : "SlideWand still isn't trusted"
         alert.informativeText =
-            "macOS ties Accessibility permission to each build. After updating, " +
-            "the old grant stops applying even though the switch still looks on.\n\n" +
+            (stale
+                ? "SlideWand had Accessibility permission, but the update replaced the app's " +
+                  "signature, so macOS stopped honoring the old grant. This is the last time " +
+                  "you'll need to do this — new releases keep the same signature.\n\n"
+                : "macOS ties Accessibility permission to each build. After updating, " +
+                  "the old grant can stop applying even though the switch still looks on.\n\n") +
             "Fix: in Settings → Privacy & Security → Accessibility, remove " +
             "SlideWand with the – button, then re-add it with the + button " +
             "(choose /Applications/SlideWand.app). It usually takes effect within " +
@@ -1540,6 +1563,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func updateMenu() {
+        // Never touch UI once termination has been requested: the timer's
+        // last tick can otherwise race AppKit's teardown (quit crash).
+        guard !terminating else { return }
         tickCount += 1
         if tickCount % 15 == 0 {
             Log.line("heartbeat t=\(tickCount)s previewVisible=\(previewWindow?.isVisible ?? false) appWindows=\(NSApp.windows.count) active=\(NSApp.isActive)")
