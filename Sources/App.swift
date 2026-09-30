@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import CoreGraphics
+import QuartzCore
 import ServiceManagement
 
 // MARK: - HUD state + overlay drawing
@@ -165,16 +166,23 @@ final class PreviewView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         previewLayer.videoGravity = .resizeAspectFill
+        // Mirror the displayed video horizontally (selfie-style) with a pure
+        // Core Animation transform. This is display-only: the gesture engine
+        // already flips Vision x-coordinates (see VisionHandTracker), so the
+        // hand overlay and wave directions line up with the mirrored image.
+        previewLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        previewLayer.transform = CATransform3DMakeScale(-1, 1, 1)
         layer?.addSublayer(previewLayer)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
-    // NOTE (v1.3.2): do NOT touch previewLayer.connection's mirroring/rotation
-    // properties. On macOS 26's Tundra capture stack, setting isVideoMirrored
-    // throws an ObjC exception (via isVideoRotationAngleSupported:) which
-    // AppKit turns into a SIGTRAP crash. Unmirrored preview is correct for
-    // directional gestures anyway.
+    // NOTE (v1.3.2/v1.3.3): do NOT touch previewLayer.connection's
+    // mirroring/rotation properties. On macOS 26's Tundra capture stack,
+    // setting isVideoMirrored throws an ObjC exception (via
+    // isVideoRotationAngleSupported:) which AppKit turns into a SIGTRAP crash.
+    // The CALayer transform above mirrors the preview without ever talking
+    // to the capture connection.
     override func layout() {
         super.layout()
         previewLayer.frame = bounds
@@ -248,6 +256,12 @@ final class WandController: NSObject, HandTrackerDelegate {
         cameraRunning = false
         notice = "Camera access denied — enable it in System Settings → Privacy & Security → Camera."
         render(points: nil)
+    }
+
+    /// Called on quit: release the camera promptly.
+    func stop() {
+        tracker.stop()
+        cameraRunning = false
     }
 
     func refreshHUD() {
@@ -630,10 +644,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v1.3.1)")
+        Log.line("didFinishLaunching: start (v1.3.3)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
-        // NOTE: no setActivationPolicy call — LSUIElement in Info.plist already
-        // makes this a menu-bar app; the extra call hid all windows on some systems.
+        // NOTE: no setActivationPolicy call — this is a regular Dock app
+        // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
+        // status item and windows invisibly). The extra call hid all windows
+        // on some systems.
         buildStatusItem()
         Log.line("status item built")
         print("[SlideWand] status item built")
@@ -694,6 +710,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false // menu-bar app: closing windows doesn't quit
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // The 1s menu timer must not fire while AppKit tears the app down: a
+        // tick landing mid-teardown crashed on quit (EXC_BAD_ACCESS inside
+        // updateMenu). Stop the camera too so it releases promptly.
+        menuTimer?.invalidate()
+        menuTimer = nil
+        controller?.stop()
+        Log.line("applicationWillTerminate: timer stopped, camera released")
     }
 
     private func buildStatusItem() {

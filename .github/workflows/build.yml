@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/SlideWand.app/Contents/MacOS
-          FW="-framework AVFoundation -framework Vision -framework AppKit -framework CoreGraphics"
+          FW="-framework AVFoundation -framework Vision -framework AppKit -framework CoreGraphics -framework QuartzCore"
           # Native arm64 build (Apple Silicon runner — always works)
           # shellcheck disable=SC2086
           swiftc -O -swift-version 5 -o /tmp/SlideWand-arm64 \
