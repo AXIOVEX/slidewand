@@ -27,13 +27,11 @@ jobs:
           # Native arm64 build (Apple Silicon runner — always works)
           # shellcheck disable=SC2086
           swiftc -O -swift-version 5 -o /tmp/SlideWand-arm64 \
-            Sources/GestureEngine.swift Sources/VisionHandTracker.swift \
-            Sources/KeySender.swift Sources/App.swift $FW
+            Sources/*.swift $FW
           # Best-effort Intel slice for a universal binary
           # shellcheck disable=SC2086
-          if swiftc -O -swift-version 5 -target x86_64-apple-macosx13.0 -o /tmp/SlideWand-x86_64 \
-            Sources/GestureEngine.swift Sources/VisionHandTracker.swift \
-            Sources/KeySender.swift Sources/App.swift $FW; then
+          if swiftc -O -swift-version 5 -target x86_64-apple-macosx14.0 -o /tmp/SlideWand-x86_64 \
+            Sources/*.swift $FW; then
             lipo -create /tmp/SlideWand-arm64 /tmp/SlideWand-x86_64 \
               -output build/SlideWand.app/Contents/MacOS/SlideWand
             echo "Universal binary (arm64 + x86_64)"
