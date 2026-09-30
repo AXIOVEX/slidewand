@@ -1,4 +1,11 @@
-# SlideWand v0.2.3
+# SlideWand v0.2.4
+
+## What's new in v0.2.4
+
+- **Release pipeline fix.** v0.2.3's build never shipped (the CI workflow file
+  had an error), so v0.2.4 carries the full v0.2.3 feature set: click-to-pick
+  tip calibration, the quit-crash fix, and stable signing so the Accessibility
+  grant survives updates.
 
 ## What's new in v0.2.3
 

@@ -25,19 +25,24 @@ jobs:
         # self-signed "SlideWand" identity (repo secrets SLIDEWAND_SIGN_P12_B64
         # / SLIDEWAND_SIGN_PASSWORD) so the grant survives updates.
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          SIGN_P12_B64: ${{ secrets.SLIDEWAND_SIGN_P12_B64 }}
         run: |
-          if [ -z "${{ secrets.SLIDEWAND_SIGN_P12_B64 }}" ]; then
+          if [ -z "$SIGN_P12_B64" ]; then
             echo "::error::Release builds require the SLIDEWAND_SIGN_P12_B64 secret (stable signing identity)."
             exit 1
           fi
 
       - name: Import signing certificate
-        if: ${{ secrets.SLIDEWAND_SIGN_P12_B64 != '' }}
         env:
           SIGN_P12_B64: ${{ secrets.SLIDEWAND_SIGN_P12_B64 }}
           SIGN_PASSWORD: ${{ secrets.SLIDEWAND_SIGN_PASSWORD }}
         run: |
           set -euo pipefail
+          if [ -z "$SIGN_P12_B64" ]; then
+            echo "No signing secrets configured — build will be ad-hoc signed."
+            exit 0
+          fi
           echo "$SIGN_P12_B64" | base64 --decode > /tmp/slidewand-sign.p12
           KC=/tmp/slidewand-sign.keychain-db
           security create-keychain -p "$SIGN_PASSWORD" "$KC"
