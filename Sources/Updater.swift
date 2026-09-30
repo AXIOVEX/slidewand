@@ -24,20 +24,21 @@ final class Updater {
     }
 
     /// Manual check from the menu. Reports "up to date" when there's nothing new.
+    ///
+    /// No GitHub API, no keys: github.com 302-redirects /releases/latest to
+    /// /releases/tag/<tag>, so the final URL after redirects carries the
+    /// latest version. The asset is then fetched from the plain download URL.
     func check(interactive: Bool) {
         UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
-        guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else { return }
+        guard let url = URL(string: "https://github.com/\(repo)/releases/latest") else { return }
         var req = URLRequest(url: url)
         req.setValue("SlideWand-updater", forHTTPHeaderField: "User-Agent")
-        URLSession.shared.dataTask(with: req) { data, _, _ in
+        URLSession.shared.dataTask(with: req) { _, response, _ in
             var found: (version: String, url: URL)?
-            if let data = data,
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let tag = json["tag_name"] as? String,
-               let assets = json["assets"] as? [[String: Any]],
-               let asset = assets.first(where: { ($0["name"] as? String) == self.assetName }),
-               let dl = asset["browser_download_url"] as? String,
-               let dlURL = URL(string: dl) {
+            if let final = response?.url,
+               final.pathComponents.suffix(2).first == "tag",
+               let tag = final.pathComponents.last,
+               let dlURL = URL(string: "https://github.com/\(self.repo)/releases/download/\(tag)/\(self.assetName)") {
                 found = (tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV")), dlURL)
             }
             DispatchQueue.main.async {

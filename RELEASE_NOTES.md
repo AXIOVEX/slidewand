@@ -1,3 +1,14 @@
+# SlideWand 1.3.4
+
+## What changed
+- **Simpler, sturdier update checks.** "Check for Updates" no longer goes through the GitHub API (which rate-limits anonymous calls and could fail with "Couldn't check for updates"). It now just follows the public `github.com/.../releases/latest` redirect — the final URL carries the latest version — and downloads the asset from the plain release download URL. No keys, no API.
+- Version 1.3.4 (build 9). Regular Dock app; still not Apple-notarized (right-click → Open on first launch).
+
+## Install
+Download `SlideWand-macos.zip` below, unzip, move `SlideWand.app` to `/Applications`, then right-click → Open (first launch only). Grant Camera when asked.
+
+---
+
 # SlideWand 1.3.3
 
 ## What changed
