@@ -18,6 +18,7 @@ struct HudState {
     var lastActionAge: Double = 99
     var accessibilityOK: Bool = true
     var notice: String? = nil
+    var tipIndex: Int? = nil
 }
 
 private let skeletonChains = [
@@ -78,6 +79,14 @@ final class OverlayView: NSView {
             NSColor.green.setFill()
             for p in pts {
                 NSBezierPath(ovalIn: NSRect(x: X(p.x) - 3, y: Y(p.y) - 3, width: 6, height: 6)).fill()
+            }
+            // Wand tip marker (from calibration)
+            if let ti = hud.tipIndex, ti < pts.count {
+                let p = pts[ti]
+                NSColor.cyan.setFill()
+                NSBezierPath(ovalIn: NSRect(x: X(p.x) - 7, y: Y(p.y) - 7, width: 14, height: 14)).fill()
+                text("TIP", at: CGPoint(x: X(p.x) + 12, y: Y(p.y) - 16), size: 11,
+                     color: .cyan, bold: true)
             }
         }
         if hud.trail.count > 1 {
@@ -222,6 +231,15 @@ final class WandController: NSObject, HandTrackerDelegate {
     private var axPrompted = false
     private var lastAxCheck: Double = 0
 
+    // Wand-tip calibration: learn which landmark is the tip of the wand.
+    var calibration: WandCalibration? = WandCalibration.load()
+    var calibrating = false
+    var calibrationMessage: String? = nil
+    private var calFrames: [[Pt]] = []
+    private var calTipTrail: [Pt] = []
+    private var calDeadline: Double = 0
+    private let calDuration = 2.5
+
     private var minHandSize: Double { Tuning.shared.minHandSize }
 
     override init() {
@@ -264,6 +282,84 @@ final class WandController: NSObject, HandTrackerDelegate {
         cameraRunning = false
     }
 
+    // MARK: Wand calibration
+
+    var calibrationProgress: Double {
+        guard calibrating else { return 0 }
+        let remain = max(0, calDeadline - ProcessInfo.processInfo.systemUptime)
+        return min(1.0, 1.0 - remain / calDuration)
+    }
+
+    /// Begin a calibration capture: hold the wand up, tip pointing up, steady.
+    func startCalibration() {
+        calFrames.removeAll()
+        calTipTrail.removeAll()
+        calibrationMessage = nil
+        calibrating = true
+        calDeadline = ProcessInfo.processInfo.systemUptime + calDuration
+        gestureLabel = "calibrating — hold your wand still…"
+        swipe.reset(); hold.reset(); trail.removeAll()
+    }
+
+    func cancelCalibration() {
+        calibrating = false
+        gestureLabel = "wave quickly ← / →"
+    }
+
+    func clearCalibration() {
+        WandCalibration.clear()
+        calibration = nil
+        calibrationMessage = nil
+    }
+
+    private func captureCalibrationFrame(now: Double, points: [Pt]?, handOK: Bool) {
+        if let pts = points, handOK {
+            calFrames.append(pts)
+            if let top = pts.enumerated().min(by: { $0.element.y < $1.element.y }) {
+                calTipTrail.append(top.element)
+            }
+        }
+        if now >= calDeadline { finishCalibration() }
+    }
+
+    private func finishCalibration() {
+        calibrating = false
+        defer { render(points: nil) }
+        let need = Int(calDuration * 15) // require a solid majority of frames
+        guard calFrames.count >= need, !calTipTrail.isEmpty else {
+            calibrationMessage = "I couldn't see your wand — hold it up in view and try again."
+            gestureLabel = "wave quickly ← / →"
+            return
+        }
+        // Average each landmark over the capture window; the tip is the topmost.
+        var avg = [Pt](repeating: Pt(x: 0, y: 0), count: 21)
+        let n = Double(calFrames.count)
+        for f in calFrames {
+            for i in 0..<21 { avg[i].x += f[i].x / n; avg[i].y += f[i].y / n }
+        }
+        guard let tipEntry = avg.enumerated().min(by: { $0.element.y < $1.element.y }) else {
+            calibrationMessage = "Calibration failed — please try again."
+            gestureLabel = "wave quickly ← / →"
+            return
+        }
+        // Steadiness check: the tip must not have wandered during capture.
+        let xs = calTipTrail.map { $0.x }, ys = calTipTrail.map { $0.y }
+        let wander = (xs.max() ?? 0) - (xs.min() ?? 0) + (ys.max() ?? 0) - (ys.min() ?? 0)
+        guard wander < 0.18 else {
+            calibrationMessage = "Too shaky — hold your wand still and try again."
+            gestureLabel = "wave quickly ← / →"
+            return
+        }
+        let tip = tipEntry.element
+        let cal = WandCalibration(tipIndex: tipEntry.offset, restX: tip.x, restY: tip.y,
+                                  scale: handHeight(avg), calibratedAt: Date())
+        cal.save()
+        calibration = cal
+        calibrationMessage = "Tracking your \(WandCalibration.landmarkName(cal.tipIndex)). " +
+            "Wave the tip ← / → to change slides."
+        gestureLabel = "wave quickly ← / →"
+    }
+
     func refreshHUD() {
         render(points: nil)
     }
@@ -297,9 +393,21 @@ final class WandController: NSObject, HandTrackerDelegate {
         var gesture: Gesture = .unknown
         var cx = 0.0, cy = 0.0
         let handOK = points.map { handHeight($0) >= minHandSize } ?? false
+        if calibrating {
+            // Learning the wand tip — gesture detection is paused meanwhile.
+            captureCalibrationFrame(now: now, points: points, handOK: handOK)
+            render(points: points, handOK: handOK)
+            return
+        }
         if let pts = points, handOK {
-            let c = palmCentroid(pts)
-            cx = c.x; cy = c.y
+            // Track the calibrated wand tip when we know it; otherwise the palm.
+            let track: Pt
+            if let cal = calibration, cal.tipIndex < pts.count {
+                track = pts[cal.tipIndex]
+            } else {
+                track = palmCentroid(pts)
+            }
+            cx = track.x; cy = track.y
             gesture = classifyHand(pts)
             trail.append(Pt(x: cx, y: cy))
             if trail.count > 24 { trail.removeFirst() }
@@ -371,6 +479,7 @@ final class WandController: NSObject, HandTrackerDelegate {
         hud.lastActionAge = actionAge
         hud.accessibilityOK = accessibilityOK
         hud.notice = notice
+        hud.tipIndex = calibration?.tipIndex
         overlay.render(hud)
     }
 }
@@ -479,6 +588,11 @@ final class TestWindowController: NSWindowController {
             statusParts.append("Camera: starting…")
         }
         statusParts.append(wand.accessibilityOK ? "Accessibility: granted" : "Accessibility: BLOCKED — keys won't send")
+        if let cal = wand.calibration {
+            statusParts.append("Wand: \(WandCalibration.landmarkName(cal.tipIndex)) ✓")
+        } else {
+            statusParts.append("Wand: not calibrated")
+        }
         statusLabel.stringValue = statusParts.joined(separator: "   ·   ")
         statusLabel.textColor = (!wand.cameraRunning || !wand.accessibilityOK) ? .systemRed : .systemGreen
 
@@ -493,6 +607,118 @@ final class TestWindowController: NSWindowController {
             logView.string = s
             logView.scrollToEndOfDocument(nil)
         }
+    }
+}
+
+// MARK: - Wand calibration window: teach SlideWand which fingertip is the tip
+
+final class CalibrationWindowController: NSWindowController {
+    private weak var wand: WandController?
+    private var timer: Timer?
+
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let progress = NSProgressIndicator()
+    private let startButton = NSButton(title: "Start Calibration", target: nil, action: nil)
+    private let clearButton = NSButton(title: "Clear", target: nil, action: nil)
+
+    init(wand: WandController) {
+        self.wand = wand
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 300),
+                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        win.title = "Calibrate Wand"
+        win.center()
+        super.init(window: win)
+
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 440, height: 300))
+        win.contentView = view
+
+        let title = NSTextField(labelWithString: "Teach SlideWand your wand")
+        title.font = .boldSystemFont(ofSize: 15)
+        title.frame = NSRect(x: 20, y: 248, width: 400, height: 22)
+        view.addSubview(title)
+
+        let help = NSTextField(wrappingLabelWithString:
+            "Hold your hand up like a wand, tip pointing up, and keep it still. " +
+            "SlideWand watches for a couple of seconds, learns which fingertip is the tip, " +
+            "and tracks that point from now on — waves go off the tip and how it moves. " +
+            "Watch the camera preview while you do it.")
+        help.frame = NSRect(x: 20, y: 158, width: 400, height: 84)
+        view.addSubview(help)
+
+        progress.frame = NSRect(x: 20, y: 128, width: 400, height: 16)
+        progress.minValue = 0; progress.maxValue = 1
+        progress.isIndeterminate = false
+        progress.doubleValue = 0
+        view.addSubview(progress)
+
+        statusLabel.frame = NSRect(x: 20, y: 96, width: 400, height: 24)
+        statusLabel.font = .systemFont(ofSize: 13)
+        view.addSubview(statusLabel)
+
+        startButton.frame = NSRect(x: 20, y: 20, width: 170, height: 32)
+        startButton.bezelStyle = .rounded
+        startButton.target = self; startButton.action = #selector(startPressed)
+        view.addSubview(startButton)
+
+        clearButton.frame = NSRect(x: 200, y: 20, width: 100, height: 32)
+        clearButton.bezelStyle = .rounded
+        clearButton.target = self; clearButton.action = #selector(clearPressed)
+        view.addSubview(clearButton)
+
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        timer?.invalidate()
+        wand?.cancelCalibration()
+    }
+
+    @objc private func startPressed() {
+        wand?.startCalibration()
+    }
+
+    @objc private func clearPressed() {
+        wand?.clearCalibration()
+        refresh()
+    }
+
+    private func refresh() {
+        guard let wand = wand else { return }
+        if wand.calibrating {
+            progress.doubleValue = wand.calibrationProgress
+            statusLabel.stringValue = "Hold still… learning your wand tip."
+            statusLabel.textColor = .labelColor
+            startButton.isEnabled = false
+        } else {
+            progress.doubleValue = wand.calibration != nil ? 1.0 : 0
+            startButton.isEnabled = true
+            if let msg = wand.calibrationMessage {
+                statusLabel.stringValue = msg
+                statusLabel.textColor = wand.calibration != nil ? .systemGreen : .systemOrange
+                // Keep the message until the next calibration run.
+            } else if let cal = wand.calibration {
+                let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+                statusLabel.stringValue =
+                    "Calibrated \(fmt.string(from: cal.calibratedAt)) — tracking your " +
+                    "\(WandCalibration.landmarkName(cal.tipIndex))."
+                statusLabel.textColor = .systemGreen
+            } else {
+                statusLabel.stringValue = "Not calibrated — waves track the palm for now."
+                statusLabel.textColor = .secondaryLabelColor
+            }
+        }
+    }
+
+    override func showWindow(_ sender: Any?) {
+        refresh()
+        super.showWindow(sender)
+        window?.makeKeyAndOrderFront(sender)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
@@ -636,6 +862,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: WandController!
     private var testController: TestWindowController!
     private var prefsController: PreferencesWindowController!
+    private var calibrateController: CalibrationWindowController!
     private var transientStatus: String? = nil
     private var menuTimer: Timer?
     private var tickCount = 0
@@ -644,7 +871,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v1.3.4)")
+        Log.line("didFinishLaunching: start (v1.3.5)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
@@ -659,6 +886,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] WandController created")
         testController = TestWindowController(wand: controller)
         prefsController = PreferencesWindowController()
+        calibrateController = CalibrationWindowController(wand: controller)
         Log.line("test + prefs controllers created")
 
         previewWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
@@ -736,6 +964,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLineItem.isEnabled = false
         menu.addItem(statusLineItem)
         menu.addItem(NSMenuItem(title: "Open Gesture Test…", action: #selector(openTest), keyEquivalent: "t"))
+        menu.addItem(NSMenuItem(title: "Calibrate Wand…", action: #selector(openCalibrate), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPrefs), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: ""))
         previewItem = NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: "p")
@@ -773,6 +1002,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openTest() {
         testController.show()
+    }
+
+    @objc private func openCalibrate() {
+        calibrateController.showWindow(nil)
     }
 
     @objc private func openPrefs() {

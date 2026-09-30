@@ -1,32 +1,34 @@
-# SlideWand 1.3.4
+# SlideWand v1.3.5 — Wand calibration
 
-## What changed
-- **Simpler, sturdier update checks.** "Check for Updates" no longer goes through the GitHub API (which rate-limits anonymous calls and could fail with "Couldn't check for updates"). It now just follows the public `github.com/.../releases/latest` redirect — the final URL carries the latest version — and downloads the asset from the plain release download URL. No keys, no API.
-- Version 1.3.4 (build 9). Regular Dock app; still not Apple-notarized (right-click → Open on first launch).
+Teach SlideWand which fingertip is the tip of your wand, and waves track
+the tip instead of the palm.
 
-## Install
-Download `SlideWand-macos.zip` below, unzip, move `SlideWand.app` to `/Applications`, then right-click → Open (first launch only). Grant Camera when asked.
+## New in v1.3.5
 
----
+- **Calibrate Wand…** (menu bar): hold your hand up like a wand, tip pointing
+  up, and hold still for a couple of seconds. SlideWand learns which landmark
+  is the tip (e.g. your index fingertip) and saves it — calibration survives
+  restarts.
+- **Tip-tracked waves**: once calibrated, the motion trail, wave detection,
+  and hold steadiness all run off the wand tip, so quick flicks of the tip
+  drive next/previous. Without calibration the app falls back to palm tracking.
+- **Tip marker on the camera preview**: the calibrated tip gets a cyan
+  "TIP" marker so you can see exactly what the app is following.
+- **Steadiness + visibility checks**: calibration refuses a shaky capture or
+  one where the hand wasn't in view, and tells you to try again.
+- The gesture test window now shows wand state ("Wand: index fingertip ✓"
+  or "Wand: not calibrated").
 
-# SlideWand 1.3.3
+## Still true
 
-## What changed
-- **Mirrored camera preview.** The preview is now flipped horizontally (selfie-style), which is what the gesture math always assumed — the hand skeleton overlay and wave directions now line up with the video. Done with a display-only layer transform; the macOS 26 capture-connection mirroring call that crashed 1.3.0/1.3.1 stays removed for good.
-- **Fixed a crash on quit.** The menu-bar refresh timer could fire while the app was tearing down (EXC_BAD_ACCESS in the menu tick); it is now stopped in `applicationWillTerminate`, and the camera is released on quit.
-- Version 1.3.3 (build 8). Regular Dock app; still not Apple-notarized (right-click → Open on first launch).
+- Native Swift (Vision + AVFoundation), everything on-device, no dependencies.
+- Mirrored preview is display-only (Core Animation transform); the app never
+  touches `AVCaptureConnection` mirroring/rotation.
+- The self-updater uses only public github.com release/download URLs —
+  no GitHub API, no keys.
 
-## Install
-Download `SlideWand-macos.zip` below, unzip, move `SlideWand.app` to `/Applications`, then right-click → Open (first launch only). Grant Camera when asked.
+## Install / update
 
----
-
-# SlideWand 1.3.2
-
-## What changed
-- **Fixed the launch crash (the real bug).** On macOS 26's new camera stack, setting the preview layer's `isVideoMirrored` throws an Objective-C exception, which macOS turns into an instant crash a few seconds after launch. The mirroring call is removed — the preview now shows unmirrored video, which is also the correct orientation for directional gestures.
-- Kept from 1.3.1: explicit `main.swift` bootstrap and loud `[SlideWand]` startup prints when run from Terminal.
-- Version 1.3.2 (build 7). Regular Dock app; still not Apple-notarized (right-click → Open on first launch).
-
-## Install
-Download `SlideWand-macos.zip` below, unzip, move `SlideWand.app` to `/Applications`, then right-click → Open (first launch only). Grant Camera when asked.
+Download **SlideWand-macos.zip** below, unzip, and replace
+`/Applications/SlideWand.app`. First launch: right-click → Open
+(the app is ad-hoc signed, not Apple-notarized).
