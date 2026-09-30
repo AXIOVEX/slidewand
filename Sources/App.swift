@@ -627,14 +627,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var prefsController: PreferencesWindowController!
     private var transientStatus: String? = nil
     private var menuTimer: Timer?
+    private var tickCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        Log.reset()
+        Log.line("didFinishLaunching: start (v1.2.1)")
+        // NOTE: no setActivationPolicy call — LSUIElement in Info.plist already
+        // makes this a menu-bar app; the extra call hid all windows on some systems.
         buildStatusItem()
+        Log.line("status item built")
 
         controller = WandController()
+        Log.line("WandController created")
         testController = TestWindowController(wand: controller)
         prefsController = PreferencesWindowController()
+        Log.line("test + prefs controllers created")
 
         previewWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
                                 styleMask: [.titled, .closable, .miniaturizable],
@@ -644,8 +651,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         previewWindow.center()
         previewWindow.contentView = controller.view
         previewWindow.makeKeyAndOrderFront(nil)
+        Log.line("preview shown: isVisible=\(previewWindow.isVisible) appWindows=\(NSApp.windows.count) active=\(NSApp.isActive)")
 
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        Log.line("camera auth status: \(authStatus.rawValue)")
+        switch authStatus {
         case .authorized:
             controller.start()
         case .notDetermined:
@@ -701,6 +711,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func updateMenu() {
+        tickCount += 1
+        if tickCount % 15 == 0 {
+            Log.line("heartbeat t=\(tickCount)s previewVisible=\(previewWindow?.isVisible ?? false) appWindows=\(NSApp.windows.count) active=\(NSApp.isActive)")
+        }
         if let t = transientStatus {
             statusLineItem.title = t
             return

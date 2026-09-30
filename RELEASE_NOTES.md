@@ -1,4 +1,13 @@
-## SlideWand v1.2.0 — preferences, tuning UI, self-updates
+## SlideWand v1.2.1 — launch-window fix + diagnostics
+
+### What's new
+
+- Fixed: on some systems v1.2.0 launched with no visible windows. The redundant `setActivationPolicy(.accessory)` call (already covered by `LSUIElement` in Info.plist) has been removed.
+- Added launch diagnostics: the app now writes `/tmp/SlideWand.log` with its startup progress, so any future launch issue can be diagnosed from the log.
+
+Everything from v1.2.0 is included: menu-bar app, Gesture Test window, Preferences with live tuning sliders, launch-at-login, and self-updates from GitHub releases.
+
+---
 
 ### What's new
 
