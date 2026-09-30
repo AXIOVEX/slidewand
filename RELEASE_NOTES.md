@@ -1,4 +1,19 @@
-# SlideWand v0.1.0
+# SlideWand v0.1.1
+
+## What's new in v0.1.1
+
+- **File menu mirrors the tray menu**: Open Gesture Test…, Calibrate Wand…,
+  Preferences…, Check for Updates…, and Show/Hide Camera Preview are now in
+  the File menu too — everything reachable from the menu bar, not just the
+  status icon.
+- **Accessibility grant helper**: "Grant Accessibility Access…" now shows
+  the native macOS prompt, and if the app is still untrusted afterward it
+  explains the real fix — remove SlideWand with the – button in
+  Settings → Privacy & Security → Accessibility and re-add it (macOS ties
+  the grant to each build's signature, so the switch can look on while not
+  applying to the new build).
+
+## What's in v0.1.0
 
 Hand-gesture slide control for your Mac. Wave the tip of your wand
 ← / → to change slides.

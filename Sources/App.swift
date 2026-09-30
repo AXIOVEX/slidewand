@@ -863,8 +863,7 @@ final class PreferencesWindowController: NSWindowController {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusLineItem: NSMenuItem!
-    private var previewItem: NSMenuItem!
-    private var previewMenuItem: NSMenuItem!
+    private var previewToggleItems: [NSMenuItem] = []
     private var previewWindow: NSWindow!
     private var controller: WandController!
     private var testController: TestWindowController!
@@ -878,7 +877,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v0.1.0)")
+        Log.line("didFinishLaunching: start (v0.1.1)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
@@ -975,7 +974,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Calibrate Wand…", action: #selector(openCalibrate), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPrefs), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: ""))
-        previewItem = NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: "p")
+        let previewItem = NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: "p")
+        previewToggleItems.append(previewItem)
         menu.addItem(previewItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit SlideWand", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -1008,9 +1008,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        // File menu
+        // File menu — mirrors the tray menu's action items
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(wired(NSMenuItem(title: "Open Gesture Test…", action: #selector(openTest), keyEquivalent: "")))
+        fileMenu.addItem(wired(NSMenuItem(title: "Calibrate Wand…", action: #selector(openCalibrate), keyEquivalent: "")))
+        fileMenu.addItem(wired(NSMenuItem(title: "Preferences…", action: #selector(openPrefs), keyEquivalent: "")))
+        fileMenu.addItem(wired(NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "")))
+        fileMenu.addItem(NSMenuItem.separator())
+        let filePreviewItem = wired(NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: ""))
+        previewToggleItems.append(filePreviewItem)
+        fileMenu.addItem(filePreviewItem)
+        fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(wired(NSMenuItem(title: "Close Window", action: #selector(closeFrontWindow), keyEquivalent: "w")))
         let fileMenuItem = NSMenuItem()
         fileMenuItem.submenu = fileMenu
@@ -1018,8 +1026,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // View menu
         let viewMenu = NSMenu(title: "View")
-        previewMenuItem = wired(NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: ""))
-        viewMenu.addItem(previewMenuItem)
+        let viewPreviewItem = wired(NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: ""))
+        previewToggleItems.append(viewPreviewItem)
+        viewMenu.addItem(viewPreviewItem)
         let viewMenuItem = NSMenuItem()
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
@@ -1063,7 +1072,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if KeySender.requestAccessibilityTrust() {
             controller.accessibilityOK = true
             controller.refreshHUD()
-        } else {
+            return
+        }
+        // Still untrusted: the usual cause is macOS tying the grant to the
+        // previous build's signature — the switch looks on but no longer
+        // applies. Walk the user through the remove-and-re-add fix.
+        let alert = NSAlert()
+        alert.messageText = "SlideWand still isn't trusted"
+        alert.informativeText =
+            "macOS ties Accessibility permission to each build. After updating, " +
+            "the old grant stops applying even though the switch still looks on.\n\n" +
+            "Fix: in Settings → Privacy & Security → Accessibility, remove " +
+            "SlideWand with the – button, then re-add it with the + button " +
+            "(choose /Applications/SlideWand.app). It takes effect within a " +
+            "couple of seconds — no relaunch needed."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
             KeySender.openAccessibilitySettings()
         }
     }
@@ -1131,7 +1156,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let vis = previewWindow.isVisible
         previewWindow.setIsVisible(!vis)
         let title = vis ? "Show Camera Preview" : "Hide Camera Preview"
-        previewItem.title = title
-        previewMenuItem.title = title
+        previewToggleItems.forEach { $0.title = title }
     }
 }
