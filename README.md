@@ -1,0 +1,69 @@
+# 🪄 SlideWand
+
+Change slides by waving your hand. No clicker, no keyboard, no standing next to the laptop.
+
+A native macOS app (Swift + Apple's Vision framework). Hand tracking runs entirely on-device — no Python, no dependencies to install, no network, no cloud. Just download the release and wave.
+
+## Install (30 seconds)
+
+1. Download **`SlideWand-macos.zip`** from the [latest release](../../releases/latest) and unzip it.
+2. **Right-click `SlideWand.app` → Open** (one time only — the app isn't Apple-notarized yet, so Gatekeeper needs this manual OK on first launch; after that it opens with a normal double-click).
+3. Grant **Camera** access when prompted.
+4. Grant **Accessibility**: System Settings → Privacy & Security → Accessibility → add **SlideWand**. macOS never prompts for this one — the app opens that Settings page for you on first run and shows a banner until it's granted. It starts working the moment you toggle it; no restart needed.
+
+Then start your slideshow — Keynote, PowerPoint, Google Slides, a PDF, anything that advances with arrow keys — make sure it's the focused window, and wave. A preview window shows what the camera sees: your hand skeleton, a swipe trail, and a progress ring while a hold is charging.
+
+## Gestures
+
+| Do this | Happens |
+|---|---|
+| Wave your hand quickly to **your right** | Next slide → |
+| Wave your hand quickly to **your left** | ← Previous slide |
+| Hold an **open palm** still ~1 sec | Next slide → |
+| Hold a **closed fist** still ~1 sec | ← Previous slide |
+
+Waves are the primary control — fast and deliberate. Holds are for when you're sitting close to the camera and can't make a big wave. Ambiguous poses (pointing, peace sign, a relaxed hand) deliberately do *nothing*: only confident gestures trigger, and there's a 1-second cooldown so one wave can't double-fire.
+
+## How it works
+
+- **Apple's Vision framework** (`VNDetectHumanHandPoseRequest`) finds 21 hand landmarks per frame, hardware-accelerated. No ML model to download, no third-party tracking SDK.
+- **Motion-based swipe detection**: a quick horizontal flick of the hand centroid fires the trigger, regardless of hand shape, lighting, background, or distance. Slow drifts (like raising your hand into frame) are rejected by a minimum-speed gate.
+- **Pose as a secondary channel**: open-palm vs. fist is classified from finger-extension ratios on the landmarks (rotation- and scale-invariant). It only fires after a full still second.
+- Triggers are sent as plain → / ← arrow key presses, so this works with *any* presentation software.
+
+The gesture engine (`Sources/GestureEngine.swift`) is a direct port of a Python prototype whose logic passed 21 unit tests covering swipes, holds, cooldowns, and ambiguous poses.
+
+## Build from source
+
+Requires Xcode command-line tools on a Mac:
+
+```bash
+swiftc -O -o SlideWand Sources/*.swift \
+  -framework AVFoundation -framework Vision -framework AppKit -framework CoreGraphics
+```
+
+Or push a `v*` tag — GitHub Actions builds a universal (Apple Silicon + Intel) `SlideWand.app`, zips it, and attaches it to a release automatically.
+
+## Tuning
+
+Constants live in `Sources/GestureEngine.swift` (`SwipeDetector`, `HoldDetector`) and `Sources/App.swift` (`minHandHeight`):
+
+- `minDx` (0.30) — smaller = shorter flicks trigger. In a tight room, try 0.22.
+- `holdTime` (1.0) — seconds of stillness for palm/fist triggers.
+- `cooldown` (1.0) — minimum seconds between slide changes.
+- `minHandHeight` (0.16) — raise to ignore people in the background.
+
+## Troubleshooting
+
+- **Keys don't reach the slideshow** → Accessibility permission (step 4 above). The red banner in the preview tells you while it's blocked.
+- **"Could not open camera"** → another app (Zoom, Photo Booth) is using it; close it.
+- **Gestures not detected** → check the preview: is the hand skeleton drawn? More light helps; strong backlighting hurts.
+- **Slides advance twice** → slow down slightly between waves, or raise `cooldown`.
+
+## Privacy
+
+All processing is on-device. The camera feed is processed in memory and never saved, uploaded, or transmitted. The app makes zero network connections.
+
+## License
+
+MIT — see [LICENSE](LICENSE). © 2026 Axiovex Systems, LLC.
