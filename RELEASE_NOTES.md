@@ -1,4 +1,22 @@
-# SlideWand v0.1.2
+# SlideWand v0.2.0
+
+## What's new in v0.2.0
+
+- **Tracks your physical wand — the stick itself, not your hand.** Each video
+  frame is scanned for stick-like rectangles; the tip is the topmost end.
+  When the wand is visible, waves and motion track the wand tip (magenta TIP
+  marker, cyan outline). Hands are never mistaken for the wand: with no wand
+  in view, gestures fall back to the palm.
+- **Guided 3-step wand calibration** (replaces the old fingertip learning):
+  1. hold the top third of your wand in the target box, tip pointing up,
+     until it's steady — this photographs the tip to learn its shape and color;
+  2. slowly tilt left and back to center; 3. slowly tilt right and back to
+  center — so tracking stays locked while the wand moves. The video overlay
+  shows per-step instructions, a live yellow dot on the detected tip, and a
+  progress bar; the wand's color/shape profile is saved for future launches.
+- The red "ACCESSIBILITY BLOCKED" tray line is now clickable — it opens the
+  remove-and-re-add walkthrough (macOS ties the grant to each build, so every
+  update needs it redone for /Applications/SlideWand.app).
 
 ## What's new in v0.1.2
 

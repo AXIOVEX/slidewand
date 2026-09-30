@@ -1,20 +1,21 @@
 import Foundation
 
-// MARK: - Wand calibration: learn which hand landmark is the tip of the
-// user's wand, so waves and motion track the tip instead of the palm.
+// MARK: - Wand profile: what the physical wand looks like, learned during
+// the guided calibration flow (hold the top third in the box, tip up, then
+// rotate left and back, right and back). Used to pick the wand out of the
+// rectangle candidates each frame.
 
-/// Persisted wand-tip calibration, learned during the calibration flow.
+/// Persisted visual profile of the user's physical wand.
 struct WandCalibration: Codable {
-    /// Landmark index (0...20, Vision 21-point order) of the wand tip.
-    var tipIndex: Int
-    /// Tip rest position (normalized, engine convention) at calibration time.
-    var restX: Double
-    var restY: Double
-    /// Hand height at calibration time, for scale-invariant thresholds later.
-    var scale: Double
+    /// Mean tip color, 0...1 RGB, sampled around the tip during calibration.
+    var red: Double
+    var green: Double
+    var blue: Double
+    /// Length/width shape ratio of the wand's rectangle.
+    var aspect: Double
     var calibratedAt: Date
 
-    private static let key = "wandCalibration.v1"
+    private static let key = "wandProfile.v1"
 
     static func load() -> WandCalibration? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
@@ -31,21 +32,9 @@ struct WandCalibration: Codable {
         UserDefaults.standard.removeObject(forKey: key)
     }
 
-    /// Friendly name for a landmark index, shown after calibration.
-    static func landmarkName(_ i: Int) -> String {
-        switch i {
-        case 4: return "thumb tip"
-        case 8: return "index fingertip"
-        case 12: return "middle fingertip"
-        case 16: return "ring fingertip"
-        case 20: return "little fingertip"
-        case 0: return "wrist"
-        case 1, 2, 3: return "thumb"
-        case 5, 6, 7: return "index finger"
-        case 9, 10, 11: return "middle finger"
-        case 13, 14, 15: return "ring finger"
-        case 17, 18, 19: return "little finger"
-        default: return "landmark \(i)"
-        }
+    /// Euclidean distance between a candidate tip color and this profile.
+    static func colorDistance(r: Double, g: Double, b: Double, to p: WandCalibration) -> Double {
+        let dr = r - p.red, dg = g - p.green, db = b - p.blue
+        return (dr * dr + dg * dg + db * db).squareRoot()
     }
 }
