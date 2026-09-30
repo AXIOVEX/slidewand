@@ -1,0 +1,28 @@
+name: Debug signing secrets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: macos-15
+    steps:
+      - name: Diagnose secrets
+        env:
+          SIGN_P12_B64: ${{ secrets.SLIDEWAND_SIGN_P12_B64 }}
+          SIGN_PASSWORD: ${{ secrets.SLIDEWAND_SIGN_PASSWORD }}
+        run: |
+          set -uo pipefail
+          echo "P12_B64 length: ${#SIGN_P12_B64}"
+          echo "PASSWORD length: ${#SIGN_PASSWORD}"
+          echo "$SIGN_P12_B64" | base64 --decode > /tmp/test-sign.p12
+          echo "decoded p12 bytes: $(wc -c < /tmp/test-sign.p12)"
+          echo "decoded p12 sha256: $(shasum -a 256 /tmp/test-sign.p12 | cut -d' ' -f1)"
+          echo "expected sha256: 3dd6edcc3c213ceafea092a1bc54fe2cc0978dbef107df3e7800fb56b7c789ff"
+          # Try openssl to see if the p12 parses and the password works
+          openssl pkcs12 -in /tmp/test-sign.p12 -passin "pass:$SIGN_PASSWORD" -nokeys >/dev/null 2>&1 \
+            && echo "openssl: password OK" \
+            || echo "openssl: password FAILED"
