@@ -1,9 +1,9 @@
-# SlideWand v1.3.5 — Wand calibration
+# SlideWand v1.3.6 — Wand calibration
 
 Teach SlideWand which fingertip is the tip of your wand, and waves track
 the tip instead of the palm.
 
-## New in v1.3.5
+## New in v1.3.6
 
 - **Calibrate Wand…** (menu bar): hold your hand up like a wand, tip pointing
   up, and hold still for a couple of seconds. SlideWand learns which landmark

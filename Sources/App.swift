@@ -343,8 +343,11 @@ final class WandController: NSObject, HandTrackerDelegate {
             return
         }
         // Steadiness check: the tip must not have wandered during capture.
-        let xs = calTipTrail.map { $0.x }, ys = calTipTrail.map { $0.y }
-        let wander = (xs.max() ?? 0) - (xs.min() ?? 0) + (ys.max() ?? 0) - (ys.min() ?? 0)
+        let xs = calTipTrail.map { $0.x }
+        let ys = calTipTrail.map { $0.y }
+        let xRange = (xs.max() ?? 0.0) - (xs.min() ?? 0.0)
+        let yRange = (ys.max() ?? 0.0) - (ys.min() ?? 0.0)
+        let wander = xRange + yRange
         guard wander < 0.18 else {
             calibrationMessage = "Too shaky — hold your wand still and try again."
             gestureLabel = "wave quickly ← / →"
@@ -871,7 +874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v1.3.5)")
+        Log.line("didFinishLaunching: start (v1.3.6)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
