@@ -37,10 +37,24 @@ final class VisionHandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         let r = VNDetectRectanglesRequest()
         r.minimumAspectRatio = 0.05
         r.maximumAspectRatio = 20.0
-        r.minimumSize = 0.02
-        r.maximumObservations = 10
+        r.minimumSize = 0.005
+        r.maximumObservations = 12
         return r
     }()
+
+    /// Region of interest for rectangle detection, in Vision coordinates
+    /// (bottom-left origin, unmirrored). Written from the main thread, read on
+    /// the video queue; a stale frame's worth of lag is harmless.
+    var rectROI: CGRect? = nil
+
+    private var latestBuffer: CVPixelBuffer?
+    private let bufferLock = NSLock()
+    /// The most recently captured pixel buffer, safe to read from any thread.
+    /// Buffers are never mutated after creation, so a retained buffer stays valid.
+    var currentFrame: CVPixelBuffer? {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        return latestBuffer
+    }
 
     /// Vision joint names in MediaPipe 21-point order (wrist, thumb 1-4, index 5-8, ...).
     private let joints: [VNHumanHandPoseObservation.JointName] = [
@@ -104,6 +118,10 @@ final class VisionHandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        bufferLock.lock()
+        latestBuffer = pixelBuffer
+        bufferLock.unlock()
+        rectRequest.regionOfInterest = rectROI ?? CGRect(x: 0, y: 0, width: 1, height: 1)
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
                                            orientation: .up,
                                            options: [:])
@@ -167,21 +185,21 @@ final class VisionHandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
                                      pixelBuffer: CVPixelBuffer) -> [WandCandidate] {
         var out: [WandCandidate] = []
         for obs in observations {
-            guard obs.confidence >= 0.3 else { continue }
+            guard obs.confidence >= 0.25 else { continue }
             // Work in Vision coords for the color sample, convert after.
             let vcs = [obs.topLeft, obs.topRight, obs.bottomRight, obs.bottomLeft]
             let edges = [(vcs[0], vcs[1]), (vcs[1], vcs[2]), (vcs[2], vcs[3]), (vcs[3], vcs[0])]
             let lens = edges.map { hypot($0.0.x - $0.1.x, $0.0.y - $0.1.y) }
             guard let length = lens.max(), let width = lens.min(),
-                  length >= 0.12, length / max(width, 1e-6) >= 3.5 else { continue }
+                  length >= 0.10, length / max(width, 1e-6) >= 3.0 else { continue }
             // The two ends are the two shortest edges; the tip is the one
             // highest on screen (smallest y in top-left-origin coords).
             let order = lens.indices.sorted { lens[$0] < lens[$1] }
             let mids = edges.map { CGPoint(x: ($0.0.x + $0.1.x) / 2, y: ($0.0.y + $0.1.y) / 2) }
             let tipV = [mids[order[0]], mids[order[1]]].max(by: { $0.y < $1.y })!
-            let color = sampleTipColor(at: tipV, in: pixelBuffer)
-            let corners = vcs.map(toView)
             let tip = toView(tipV)
+            let color = samplePatch(viewPt: tip, in: pixelBuffer)
+            let corners = vcs.map(toView)
             out.append(WandCandidate(tip: tip, corners: corners, length: Double(length),
                                      aspect: Double(length / max(width, 1e-6)),
                                      tipColor: color))
@@ -189,15 +207,55 @@ final class VisionHandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         return out
     }
 
-    /// Mean color of a 5x5 patch around a Vision-coords point. The pixel buffer
-    /// is raw (unmirrored): px = x*W, py = (1-y)*H.
-    private func sampleTipColor(at v: CGPoint, in pixelBuffer: CVPixelBuffer) -> (Double, Double, Double) {
+    // MARK: Appearance-based tip tracking
+
+    /// Mean color of a 5x5 patch around a view-coords point (top-left origin,
+    /// x mirrored to match the preview). The pixel buffer is raw (unmirrored):
+    /// px = (1-x)*W, py = y*H. Safe to call from any thread.
+    func sampleColor(at viewPt: Pt) -> (Double, Double, Double)? {
+        guard let buf = currentFrame else { return nil }
+        return samplePatch(viewPt: viewPt, in: buf)
+    }
+
+    /// Search a square window around `center` for the patch whose color best
+    /// matches `profile`. Returns the best point and its color distance.
+    /// Score favors the highest (topmost) good match, since the wand points
+    /// up and the tip is the topmost matching blob — this keeps the track
+    /// from sliding down the shaft onto similar-colored grain.
+    func bestTipMatch(around center: Pt, profile: (Double, Double, Double),
+                      radius: Double, step: Double) -> (pt: Pt, dist: Double)? {
+        guard let buf = currentFrame else { return nil }
+        var bestPt: Pt? = nil
+        var bestScore = Double.infinity
+        var bestDist = Double.infinity
+        var yy = -radius
+        while yy <= radius + 1e-9 {
+            var xx = -radius
+            while xx <= radius + 1e-9 {
+                let cand = Pt(x: center.x + xx, y: center.y + yy)
+                if cand.x >= 0, cand.x <= 1, cand.y >= 0, cand.y <= 1 {
+                    let c = samplePatch(viewPt: cand, in: buf)
+                    let d = sqrt(pow(c.0 - profile.0, 2) + pow(c.1 - profile.1, 2) + pow(c.2 - profile.2, 2))
+                    // t = 0 at the top of the window, 1 at the bottom.
+                    let t = (yy + radius) / (2 * radius)
+                    let score = d + 0.35 * t
+                    if score < bestScore { bestScore = score; bestPt = cand; bestDist = d }
+                }
+                xx += step
+            }
+            yy += step
+        }
+        guard let p = bestPt else { return nil }
+        return (p, bestDist)
+    }
+
+    private func samplePatch(viewPt: Pt, in pixelBuffer: CVPixelBuffer) -> (Double, Double, Double) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return (0, 0, 0) }
         let w = CVPixelBufferGetWidth(pixelBuffer), h = CVPixelBufferGetHeight(pixelBuffer)
         let row = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        let cx = Int(v.x * CGFloat(w)), cy = Int((1 - v.y) * CGFloat(h))
+        let cx = Int((1 - viewPt.x) * Double(w)), cy = Int(viewPt.y * Double(h))
         var r = 0.0, g = 0.0, b = 0.0, n = 0.0
         for dy in -2...2 {
             for dx in -2...2 {

@@ -26,6 +26,8 @@ struct HudState {
     var calibrationHint: String = ""
     var calStep: Int = 0 // 0 idle, 1 find, 2 rotateLeft, 3 rotateRight
     var calBox: (x0: Double, y0: Double, x1: Double, y1: Double)? = nil
+    var calRing: Pt? = nil        // step-1 target ring: put the wand's tip here
+    var acquiring: Bool = false   // step 1 still looking for the tip (vs. holding steady)
 }
 
 private let skeletonChains = [
@@ -60,6 +62,63 @@ final class OverlayView: NSView {
         NSBezierPath(roundedRect: NSRect(x: p.x, y: p.y,
                                          width: width * CGFloat(hud.calibrationProgress), height: 12),
                      xRadius: 6, yRadius: 6).fill()
+    }
+
+    /// Draw a stylized wand (tan shaft, dark tip — like the real thing).
+    /// Flipped view: with basePivot=false the wand hangs DOWN from its tip
+    /// point; with basePivot=true it stands UP from its base (hand) point.
+    /// `tilt` rotates about the pivot; positive swings the far end right.
+    private func drawWandFigure(anchorX: CGFloat, anchorY: CGFloat, length: CGFloat,
+                                width: CGFloat, tilt: CGFloat,
+                                basePivot: Bool = false, alpha: CGFloat = 1) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        ctx.translateBy(x: anchorX, y: anchorY)
+        ctx.rotate(by: tilt)
+        // Shaft: rounded rect; tip end at yTip, base end at yTip+length.
+        let yTip: CGFloat = basePivot ? -length : 0
+        NSColor(red: 0.80, green: 0.60, blue: 0.34, alpha: alpha).setFill()
+        NSBezierPath(roundedRect: NSRect(x: -width / 2, y: yTip, width: width, height: length),
+                     xRadius: width / 2, yRadius: width / 2).fill()
+        // Dark tip cap at the tip end.
+        let capH = length * 0.16
+        NSColor(red: 0.16, green: 0.11, blue: 0.08, alpha: alpha).setFill()
+        NSBezierPath(roundedRect: NSRect(x: -width / 2, y: yTip, width: width, height: capH),
+                     xRadius: width / 2, yRadius: width / 2).fill()
+        ctx.restoreGState()
+    }
+
+    /// Curved double-headed arrow along an arc (pivot px,py, radius r, from
+    /// angle a0 to a1 measured from straight-up, positive = right).
+    private func drawCurvedArrow(px: CGFloat, py: CGFloat, r: CGFloat,
+                                 a0: CGFloat, a1: CGFloat) {
+        func pt(_ a: CGFloat) -> CGPoint {
+            CGPoint(x: px + r * sin(a), y: py - r * cos(a))
+        }
+        let path = NSBezierPath()
+        let n = 24
+        for i in 0...n {
+            let a = a0 + (a1 - a0) * CGFloat(i) / CGFloat(n)
+            let p = pt(a)
+            if i == 0 { path.move(to: p) } else { path.line(to: p) }
+        }
+        path.lineWidth = 4
+        path.lineCapStyle = .round
+        NSColor.white.withAlphaComponent(0.9).setStroke()
+        path.stroke()
+        // Arrowheads at both ends ("there and back").
+        for (a, dir) in [(a0, CGFloat(-1)), (a1, CGFloat(1))] {
+            let p = pt(a)
+            let tangent = CGFloat(dir) * 0.35
+            let p1 = pt(a - tangent), p2 = pt(a + tangent)
+            let head = NSBezierPath()
+            head.move(to: CGPoint(x: p.x + (p1.x - p.x) * 0.25, y: p.y + (p1.y - p.y) * 0.25))
+            head.line(to: p)
+            head.line(to: CGPoint(x: p.x + (p2.x - p.x) * 0.25, y: p.y + (p2.y - p.y) * 0.25))
+            head.lineWidth = 4
+            head.lineCapStyle = .round
+            head.stroke()
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -134,9 +193,10 @@ final class OverlayView: NSView {
             NSColor.black.withAlphaComponent(0.5).setFill()
             NSBezierPath(rect: NSRect(x: vx, y: vy, width: vw, height: vh)).fill()
 
-            if hud.calStep == 1, let box = hud.calBox {
-                // Step 1: target box in the top third — hold the wand in here, tip up
-                let bx = vx + CGFloat(box.x0) * vw, byTop = vy + (1 - CGFloat(box.y0)) * vh
+            if hud.calStep == 1, let box = hud.calBox, let ring = hud.calRing {
+                // Step 1: target box with a wand illustration — put YOUR wand's
+                // tip exactly on the glowing ring, matching the picture.
+                let bx = vx + CGFloat(box.x0) * vw, byTop = vy + CGFloat(box.y0) * vh
                 let bw = CGFloat(box.x1 - box.x0) * vw, bh = CGFloat(box.y1 - box.y0) * vh
                 let by = byTop - bh
                 NSColor.white.withAlphaComponent(0.9).setStroke()
@@ -145,42 +205,40 @@ final class OverlayView: NSView {
                 rect.lineWidth = 2.5
                 rect.setLineDash([10, 7], count: 2, phase: 0)
                 rect.stroke()
-                // Up arrow: tip points up
-                let ax = bx + bw / 2
-                NSColor.white.withAlphaComponent(0.9).setStroke()
-                let arrow = NSBezierPath()
-                arrow.move(to: CGPoint(x: ax, y: by + 50))
-                arrow.line(to: CGPoint(x: ax, y: by + 130))
-                arrow.move(to: CGPoint(x: ax - 16, y: by + 108))
-                arrow.line(to: CGPoint(x: ax, y: by + 132))
-                arrow.line(to: CGPoint(x: ax + 16, y: by + 108))
-                arrow.lineWidth = 4
-                arrow.lineCapStyle = .round
-                arrow.stroke()
-                text("TIP UP", at: CGPoint(x: ax - 32, y: by + 22), size: 15,
-                     color: .white, bold: true)
+                // Wand illustration: tip resting on the ring, shaft continuing
+                // down out of the box (you're holding the bottom).
+                let rx = X(ring.x), ry = Y(ring.y)
+                let figLen = (by + bh - ry) + 70
+                drawWandFigure(anchorX: rx, anchorY: ry, length: figLen, width: 26, tilt: 0)
+                // Pulsing target ring — green once the tip is acquired.
+                let now = ProcessInfo.processInfo.systemUptime
+                let pulse: CGFloat = 13 + 3 * CGFloat(sin(now * 5))
+                (hud.acquiring ? NSColor.systemYellow : NSColor.systemGreen).setStroke()
+                let rr = NSBezierPath(ovalIn: NSRect(x: rx - pulse, y: ry - pulse,
+                                                     width: pulse * 2, height: pulse * 2))
+                rr.lineWidth = 3
+                rr.stroke()
                 text(hud.calibrationHint, at: CGPoint(x: vx + 20, y: vy + vh - 30),
                      size: 14, color: .white, bold: true)
+                text("Match the picture: tip on the ring, then hold still.",
+                     at: CGPoint(x: vx + 20, y: vy + vh - 80), size: 12, color: .lightGray)
                 drawCalProgress(at: CGPoint(x: vx + 20, y: vy + vh - 58), width: vw - 40)
             } else if hud.calStep == 2 || hud.calStep == 3 {
-                // Steps 2/3: rotation direction arrow
-                let cx = vx + vw / 2, cy = vy + vh / 2 + 40
-                let dir: CGFloat = hud.calStep == 2 ? -1 : 1
-                NSColor.white.withAlphaComponent(0.9).setStroke()
-                let arrow = NSBezierPath()
-                arrow.move(to: CGPoint(x: cx - dir * 90, y: cy))
-                arrow.line(to: CGPoint(x: cx + dir * 90, y: cy))
-                arrow.move(to: CGPoint(x: cx + dir * 90 - dir * 22, y: cy + 16))
-                arrow.line(to: CGPoint(x: cx + dir * 90, y: cy))
-                arrow.line(to: CGPoint(x: cx + dir * 90 - dir * 22, y: cy - 16))
-                arrow.lineWidth = 5
-                arrow.lineCapStyle = .round
-                arrow.stroke()
-                text(hud.calibrationHint, at: CGPoint(x: vx + 20, y: cy + 60),
+                // Steps 2/3: tilted wand illustration + curved "there and back" arrow.
+                let cx = vx + vw / 2, py = vy + vh / 2 + 150
+                let targetTilt: CGFloat = hud.calStep == 2 ? -0.5 : 0.5
+                let len: CGFloat = 190
+                // Ghost of the upright wand, solid tilted target — pivoting at the hand.
+                drawWandFigure(anchorX: cx, anchorY: py, length: len, width: 30,
+                               tilt: 0, basePivot: true, alpha: 0.22)
+                drawWandFigure(anchorX: cx, anchorY: py, length: len, width: 30,
+                               tilt: targetTilt, basePivot: true)
+                drawCurvedArrow(px: cx, py: py, r: len, a0: 0, a1: targetTilt)
+                text(hud.calibrationHint, at: CGPoint(x: vx + 20, y: py + 60),
                      size: 15, color: .white, bold: true)
-                text("Keep the tip in view while you tilt.", at: CGPoint(x: vx + 20, y: cy + 36),
+                text("Keep the tip in view while you tilt.", at: CGPoint(x: vx + 20, y: py + 36),
                      size: 12, color: .lightGray)
-                drawCalProgress(at: CGPoint(x: vx + 20, y: cy - 60), width: vw - 40)
+                drawCalProgress(at: CGPoint(x: vx + 20, y: py - 90), width: vw - 40)
             }
 
             // Live tip dot in every step: what the app thinks the tip is
@@ -321,16 +379,20 @@ final class WandController: NSObject, HandTrackerDelegate {
     private var axPrompted = false
     private var lastAxCheck: Double = 0
 
-    // Physical wand tracking: the stick, not the hand. Rectangle detection
-    // finds wand candidates each frame; the tracked tip drives gestures.
+    // Physical wand tracking: the stick, not the hand. The tip is tracked by
+    // its learned appearance (color), because real wands are gnarly, not
+    // clean rectangles. Rectangle detection is a secondary refining signal.
     var calibration: WandCalibration? = WandCalibration.load()
     var calibrationMessage: String? = nil
     var wandTip: Pt? = nil          // smoothed tip; nil when the wand isn't seen
     var wandVisible = false
     private var wandSmooth: Pt? = nil
     private var wandLastSeen: Double = 0
-    private var lastWandCandidate: WandCandidate? = nil
+    private var wandSnapCorners: [Pt]? = nil
     private var wasWandDriven = false
+    /// Live tip appearance profile. Loaded from calibration at startup,
+    /// learned during step 1, slowly adapted while tracking.
+    private var tipProfile: (r: Double, g: Double, b: Double)?
 
     // Guided calibration steps: find the wand, rotate left, rotate right.
     enum WandCalStep { case idle, find, rotateLeft, rotateRight }
@@ -342,9 +404,11 @@ final class WandController: NSObject, HandTrackerDelegate {
     private var stepAnchor: Pt? = nil
     private var stepMinX = Double.greatestFiniteMagnitude
     private var stepMaxX = -Double.greatestFiniteMagnitude
-    private var profileR = 0.0, profileG = 0.0, profileB = 0.0
-    private var profileAspect = 0.0, profileN = 0.0
     private var findStable: [(Pt, Double)] = []
+    // Step-1 acquisition: sample the ring color until we're sure the tip is there.
+    private var acquired = false
+    private var acqSamples: [(r: Double, g: Double, b: Double, t: Double)] = []
+    private var acqContrastSince: Double? = nil
 
     /// Target box for calibration step 1 (normalized, top-left origin):
     /// the top third of the frame, centered.
@@ -365,6 +429,7 @@ final class WandController: NSObject, HandTrackerDelegate {
         view.addSubview(preview)
         view.addSubview(overlay)
         accessibilityOK = KeySender.accessibilityTrusted()
+        if let c = calibration { tipProfile = (r: c.red, g: c.green, b: c.blue) }
         render(points: nil) // draw immediately — don't wait for the first camera frame
     }
 
@@ -409,12 +474,23 @@ final class WandController: NSObject, HandTrackerDelegate {
         }
     }
 
+    /// The step-1 target ring: the user puts the wand's tip exactly here.
+    /// Top-center of the target box.
+    var calRing: Pt {
+        Pt(x: (calBox.x0 + calBox.x1) / 2,
+           y: calBox.y0 + 0.20 * (calBox.y1 - calBox.y0))
+    }
+
     /// Begin the guided calibration: find the wand, rotate left, rotate right.
     func startCalibration() {
         calStep = .find
         calibrationMessage = nil
         findStable.removeAll()
-        resetProfileAcc()
+        acquired = false
+        acqSamples.removeAll()
+        acqContrastSince = nil
+        tipProfile = nil
+        wandSmooth = nil; wandTip = nil; wandVisible = false; wandSnapCorners = nil
         gestureLabel = "calibrating — follow the steps…"
         swipe.reset(); hold.reset(); trail.removeAll()
     }
@@ -424,8 +500,9 @@ final class WandController: NSObject, HandTrackerDelegate {
         switch calStep {
         case .idle: return ""
         case .find:
-            if let tip = wandTip, wandVisible, calBoxContains(tip) { return "Hold still…" }
-            return "Hold the TOP THIRD of your wand in the box, tip pointing UP"
+            if !acquired { return "Put your wand's TIP on the glowing ring" }
+            if let tip = wandTip, wandVisible, calBoxContains(tip) { return "Got it — hold still…" }
+            return "Keep the tip on the ring…"
         case .rotateLeft:
             return stepMinX < (stepAnchor?.x ?? 1) - 0.08
                 ? "Good — bring it back to center…"
@@ -457,10 +534,6 @@ final class WandController: NSObject, HandTrackerDelegate {
         calibrationMessage = nil
     }
 
-    private func resetProfileAcc() {
-        profileR = 0; profileG = 0; profileB = 0; profileAspect = 0; profileN = 0
-    }
-
     private func beginRotateStep(_ step: WandCalStep, now: Double) {
         calStep = step
         stepStart = now
@@ -471,20 +544,74 @@ final class WandController: NSObject, HandTrackerDelegate {
         stepMaxX = -Double.greatestFiniteMagnitude
     }
 
-    /// Called every frame while calibrating. Accumulates the tip's color and
-    /// shape profile and advances the guided steps.
+    private func colorDist3(_ a: (r: Double, g: Double, b: Double),
+                            _ b: (r: Double, g: Double, b: Double)) -> Double {
+        sqrt(pow(a.r - b.r, 2) + pow(a.g - b.g, 2) + pow(a.b - b.b, 2))
+    }
+
+    /// Step-1 acquisition, run every frame until the tip is found. Samples the
+    /// color at the target ring and its surroundings: when something
+    /// tip-colored sits on the ring steadily (or a rectangle tip lands near
+    /// it), we lock on. Shape-agnostic — works for gnarly, twisted wands.
+    private func updateAcquisition(wands: [WandCandidate], now: Double) {
+        let ring = calRing
+        // Fast path: a rectangle tip right on the ring.
+        if let near = wands.min(by: { hypot($0.tip.x - ring.x, $0.tip.y - ring.y)
+                                     < hypot($1.tip.x - ring.x, $1.tip.y - ring.y) }),
+           hypot(near.tip.x - ring.x, near.tip.y - ring.y) < 0.09 {
+            tipProfile = (near.tipColor.r, near.tipColor.g, near.tipColor.b)
+            wandSmooth = near.tip
+            acquired = true
+            return
+        }
+        guard let rc = tracker.sampleColor(at: ring) else { return }
+        let ringC = (r: rc.0, g: rc.1, b: rc.2)
+        // Surrounding patches: is something sitting on the ring, or just background?
+        let off = 0.07
+        var sR = 0.0, sG = 0.0, sB = 0.0, sN = 0.0
+        for (dx, dy) in [(-off, 0), (off, 0), (0, -off), (0, off)] {
+            let p = Pt(x: ring.x + dx, y: ring.y + dy)
+            if let c = tracker.sampleColor(at: p) {
+                sR += c.0; sG += c.1; sB += c.2; sN += 1
+            }
+        }
+        guard sN > 0 else { return }
+        let surround = (r: sR / sN, g: sG / sN, b: sB / sN)
+        let contrast = colorDist3(ringC, surround)
+        acqSamples.append((r: ringC.r, g: ringC.g, b: ringC.b, t: now))
+        acqSamples.removeAll { now - $0.t > 2.5 }
+        if contrast > 0.12 {
+            if acqContrastSince == nil { acqContrastSince = now }
+        } else {
+            acqContrastSince = nil
+        }
+        guard acqSamples.count >= 8 else { return }
+        let n = Double(acqSamples.count)
+        let mean = (r: acqSamples.map { $0.r }.reduce(0, +) / n,
+                    g: acqSamples.map { $0.g }.reduce(0, +) / n,
+                    b: acqSamples.map { $0.b }.reduce(0, +) / n)
+        let variance = acqSamples.map {
+            colorDist3((r: $0.r, g: $0.g, b: $0.b), mean)
+        }.reduce(0, +) / n
+        let stable = variance < 0.05
+        let contrastHeld = (acqContrastSince.map { now - $0 > 0.4 } ?? false) && stable
+        if contrastHeld {
+            tipProfile = mean
+            wandSmooth = ring
+            acquired = true
+        }
+    }
+
+    /// Called every frame while calibrating. Advances the guided steps using
+    /// the appearance-tracked tip (not rectangle geometry).
     private func updateWandCalibration(now: Double) {
         stepFrames += 1
-        if wandVisible, let cand = lastWandCandidate {
-            stepVisible += 1
-            profileR += cand.tipColor.r; profileG += cand.tipColor.g
-            profileB += cand.tipColor.b; profileAspect += cand.aspect
-            profileN += 1
-        }
+        if wandVisible { stepVisible += 1 }
         switch calStep {
         case .idle:
             break
         case .find:
+            if !acquired { break } // updateAcquisition runs inside updateWandTracking
             if let tip = wandTip, wandVisible, calBoxContains(tip) {
                 findStable.append((tip, now))
                 findStable.removeAll { now - $0.1 > 1.2 }
@@ -511,7 +638,7 @@ final class WandController: NSObject, HandTrackerDelegate {
                         finishWandCalibration()
                     }
                 } else {
-                    // Lost the wand mid-step — retry the step, keep the profile so far.
+                    // Lost the wand mid-step — retry the step.
                     calibrationMessage = "I lost sight of the wand — let's try that step again."
                     beginRotateStep(calStep, now: now)
                 }
@@ -520,10 +647,9 @@ final class WandController: NSObject, HandTrackerDelegate {
     }
 
     private func finishWandCalibration() {
-        let n = max(profileN, 1)
-        let cal = WandCalibration(red: profileR / n, green: profileG / n,
-                                  blue: profileB / n, aspect: profileAspect / n,
-                                  calibratedAt: Date())
+        let p = tipProfile ?? (r: 0.5, g: 0.5, b: 0.5)
+        let cal = WandCalibration(red: p.r, green: p.g, blue: p.b,
+                                  aspect: 0, calibratedAt: Date())
         cal.save()
         calibration = cal
         calStep = .idle
@@ -533,44 +659,113 @@ final class WandController: NSObject, HandTrackerDelegate {
 
     // MARK: Physical wand tracking
 
-    /// Pick the wand candidate each frame and smooth the tip.
+    /// Nudge the live tip profile toward a fresh sample (slow lighting adaptation).
+    private func adaptProfile(with sample: (Double, Double, Double)?) {
+        guard let s = sample, var p = tipProfile else { return }
+        p.r += 0.03 * (s.0 - p.r); p.g += 0.03 * (s.1 - p.g); p.b += 0.03 * (s.2 - p.b)
+        tipProfile = p
+    }
+
+    /// Track the wand tip each frame. Primary signal: appearance (color) search
+    /// around the last tip, preferring the topmost good match. Secondary:
+    /// rectangle candidates refine the tip when their geometry agrees.
     private func updateWandTracking(wands: [WandCandidate], now: Double) {
-        var pick: WandCandidate? = nil
-        if calStep == .find {
-            // Step 1: only a tip inside the target box counts.
-            pick = wands.filter { calBoxContains($0.tip) }.max(by: { $0.length < $1.length })
-        } else {
-            var scored = wands
-            if let prof = calibration {
-                scored = scored.filter {
-                    WandCalibration.colorDistance(r: $0.tipColor.r, g: $0.tipColor.g,
-                                                 b: $0.tipColor.b, to: prof) < 0.4
-                }
-            }
-            if let s = wandSmooth {
-                func tipDist(_ c: WandCandidate) -> Double {
-                    hypot(c.tip.x - s.x, c.tip.y - s.y)
-                }
-                pick = scored.min(by: { tipDist($0) < tipDist($1) })
-                if let p = pick, tipDist(p) > 0.3 { pick = nil }
-            } else {
-                pick = scored.max(by: { $0.length < $1.length })
+        if calStep == .find && !acquired {
+            updateAcquisition(wands: wands, now: now)
+            updateRectROI()
+            wandVisible = false
+            return
+        }
+        let prof = tipProfile
+            ?? calibration.map { (r: $0.red, g: $0.green, b: $0.blue) }
+
+        // 1. Appearance search around the last known tip.
+        var colorTip: Pt? = nil
+        var colorD = Double.infinity
+        if let p = prof, let s = wandSmooth {
+            if let m = tracker.bestTipMatch(around: s, profile: (p.r, p.g, p.b),
+                                             radius: 0.12, step: 0.03), m.dist < 0.55 {
+                colorTip = m.pt; colorD = m.dist
             }
         }
-        if let p = pick {
+
+        // 2. Rank rectangle candidates by appearance + continuity.
+        var rectPick: WandCandidate? = nil
+        if !wands.isEmpty {
+            var best: (WandCandidate, Double)? = nil
+            for c in wands {
+                var score = 0.0
+                if let p = prof {
+                    score += colorDist3((r: c.tipColor.r, g: c.tipColor.g, b: c.tipColor.b),
+                                        (r: p.r, g: p.g, b: p.b))
+                }
+                if let s = wandSmooth {
+                    score += 0.8 * hypot(c.tip.x - s.x, c.tip.y - s.y)
+                } else {
+                    score += 0.5 * (1.0 - min(c.length, 1.0))
+                }
+                if best == nil || score < best!.1 { best = (c, score) }
+            }
+            rectPick = best?.0
+        }
+
+        // 3. Fuse: color leads, geometry refines.
+        var newTip: Pt? = nil
+        var snap: [Pt]? = nil
+        if let ct = colorTip, colorD < 0.38 {
+            newTip = ct
+            if let rp = rectPick, hypot(rp.tip.x - ct.x, rp.tip.y - ct.y) < 0.07 {
+                newTip = rp.tip
+                snap = rp.corners
+                adaptProfile(with: (rp.tipColor.r, rp.tipColor.g, rp.tipColor.b))
+            } else if let s = tracker.sampleColor(at: ct) {
+                adaptProfile(with: s)
+            }
+        } else if let rp = rectPick {
+            if let s = wandSmooth, hypot(rp.tip.x - s.x, rp.tip.y - s.y) < 0.25 {
+                newTip = rp.tip; snap = rp.corners
+            }
+        }
+
+        if let nt = newTip {
             if let s = wandSmooth {
-                wandSmooth = Pt(x: s.x + 0.45 * (p.tip.x - s.x),
-                                y: s.y + 0.45 * (p.tip.y - s.y))
+                wandSmooth = Pt(x: s.x + 0.45 * (nt.x - s.x),
+                                y: s.y + 0.45 * (nt.y - s.y))
             } else {
-                wandSmooth = p.tip
+                wandSmooth = nt
             }
             wandTip = wandSmooth
             wandLastSeen = now
             wandVisible = true
-            lastWandCandidate = p
+            wandSnapCorners = snap
         } else {
-            wandVisible = (now - wandLastSeen) < 0.4
-            if !wandVisible { wandTip = nil; wandSmooth = nil; lastWandCandidate = nil }
+            wandVisible = (now - wandLastSeen) < 0.5
+            if !wandVisible {
+                wandTip = nil; wandSmooth = nil; wandSnapCorners = nil
+            }
+        }
+        updateRectROI()
+    }
+
+    /// Focus rectangle detection where the wand is (or should be): far fewer
+    /// background false positives, and cheaper. View coords (top-left,
+    /// mirrored-x) -> Vision coords (bottom-left, unmirrored).
+    private func updateRectROI() {
+        func visionRect(x0: Double, y0: Double, x1: Double, y1: Double) -> CGRect {
+            let cx0 = min(max(0, x0), 1), cy0 = min(max(0, y0), 1)
+            let cx1 = min(max(0, x1), 1), cy1 = min(max(0, y1), 1)
+            return CGRect(x: 1 - cx1, y: 1 - cy1,
+                          width: max(cx1 - cx0, 0.01), height: max(cy1 - cy0, 0.01))
+        }
+        if calStep == .find {
+            let m = 0.08
+            tracker.rectROI = visionRect(x0: calBox.x0 - m, y0: calBox.y0 - m,
+                                         x1: calBox.x1 + m, y1: calBox.y1 + m)
+        } else if let t = wandSmooth {
+            let h = 0.22
+            tracker.rectROI = visionRect(x0: t.x - h, y0: t.y - h, x1: t.x + h, y1: t.y + h)
+        } else {
+            tracker.rectROI = nil
         }
     }
 
@@ -703,13 +898,15 @@ final class WandController: NSObject, HandTrackerDelegate {
         hud.accessibilityOK = accessibilityOK
         hud.notice = notice
         hud.wandTip = wandVisible ? wandTip : nil
-        hud.wandCorners = wandVisible ? lastWandCandidate?.corners : nil
+        hud.wandCorners = wandVisible ? wandSnapCorners : nil
         hud.wandVisible = wandVisible
         hud.calibrating = calibrating
         hud.calibrationProgress = calibrationProgress
         hud.calibrationHint = calibrationHint
         hud.calStep = calStep == .find ? 1 : calStep == .rotateLeft ? 2 : calStep == .rotateRight ? 3 : 0
         hud.calBox = (calBox.x0, calBox.y0, calBox.x1, calBox.y1)
+        hud.calRing = calStep == .find ? calRing : nil
+        hud.acquiring = calStep == .find && !acquired
         overlay.render(hud)
     }
 }
@@ -1113,7 +1310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v0.2.1)")
+        Log.line("didFinishLaunching: start (v0.2.2)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the

@@ -1,4 +1,24 @@
-# SlideWand v0.2.1
+# SlideWand v0.2.2
+
+## What's new in v0.2.2
+
+- **New detector: tracks the tip by what it looks like, not by geometry.**
+  Real wands are gnarly and twisted — clean rectangle detection kept missing
+  them. Now calibration photographs the tip's actual color, and every frame
+  searches around the last tip for the best-matching patch (preferring the
+  topmost match, so the track can't slide down the shaft onto similar-looking
+  grain). Rectangle detection is still there as a backup: when its geometry
+  agrees with the color track, the tip snaps to the more precise corner.
+  Rectangle detection is also focused on a region around the wand instead of
+  the whole frame, so background clutter stops stealing the lock.
+- **Clearer calibration overlay.** Step 1 no longer shows an abstract arrow —
+  it shows a picture of a wand with its tip resting on a pulsing target ring:
+  match the picture, then hold still. The ring turns green once the tip is
+  acquired. Steps 2/3 show a tilted wand with a curved "there and back" arrow.
+  (The old overlay also drew the target box at the bottom of the frame while
+  detection looked at the top — fixed; box and detector agree now.)
+
+## What's new in v0.2.1
 
 ## What's new in v0.2.0
 
