@@ -170,16 +170,14 @@ final class PreviewView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
-    func applyMirroring() {
-        if let conn = previewLayer.connection, conn.isVideoMirroringSupported {
-            conn.isVideoMirrored = true
-        }
-    }
-
+    // NOTE (v1.3.2): do NOT touch previewLayer.connection's mirroring/rotation
+    // properties. On macOS 26's Tundra capture stack, setting isVideoMirrored
+    // throws an ObjC exception (via isVideoRotationAngleSupported:) which
+    // AppKit turns into a SIGTRAP crash. Unmirrored preview is correct for
+    // directional gestures anyway.
     override func layout() {
         super.layout()
         previewLayer.frame = bounds
-        applyMirroring()
     }
 }
 
@@ -238,7 +236,6 @@ final class WandController: NSObject, HandTrackerDelegate {
             cameraRunning = true
             cameraError = nil
             notice = nil
-            preview.applyMirroring()
         } catch {
             cameraRunning = false
             cameraError = (error as NSError).localizedDescription
