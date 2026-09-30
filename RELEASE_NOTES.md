@@ -1,3 +1,21 @@
+## SlideWand v1.3.0 — regular Dock app (fixes invisible launch on macOS 26)
+
+### What changed
+
+- SlideWand is a regular Mac app again (Dock icon, normal activation) instead of
+  menu-bar-only. A macOS 26 Tahoe regression silently parks the status items
+  and windows of `LSUIElement` apps — v1.2.x launched with no visible UI at all
+  on affected systems. The menu-bar icon is still there when the OS paints it,
+  but the Dock icon is now the reliable home.
+- The preview window explicitly activates the app on launch so it always comes
+  forward.
+- Launch diagnostics now write to `~/Library/Logs/SlideWand.log`.
+
+Everything from v1.2.x is included: Gesture Test window, Preferences with live
+tuning sliders, launch-at-login, and self-updates from GitHub releases.
+
+---
+
 ## SlideWand v1.2.1 — launch-window fix + diagnostics
 
 ### What's new

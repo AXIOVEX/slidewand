@@ -4,7 +4,8 @@ import Foundation
 // Appends timestamped lines to /tmp/SlideWand.log. Cheap, no-ops silently on failure.
 
 enum Log {
-    static let url = FileManager.default.temporaryDirectory.appendingPathComponent("SlideWand.log")
+    static let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/SlideWand.log")
 
     static func line(_ s: String) {
         let ts = ISO8601DateFormatter().string(from: Date())

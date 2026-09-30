@@ -651,6 +651,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         previewWindow.center()
         previewWindow.contentView = controller.view
         previewWindow.makeKeyAndOrderFront(nil)
+        // Regular (Dock) app: make sure we're actually frontmost on launch so
+        // the preview window can't end up behind other apps or unpainted.
+        NSApp.activate(ignoringOtherApps: true)
         Log.line("preview shown: isVisible=\(previewWindow.isVisible) appWindows=\(NSApp.windows.count) active=\(NSApp.isActive)")
 
         let authStatus = AVCaptureDevice.authorizationStatus(for: .video)

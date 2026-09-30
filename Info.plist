@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.slidewand.app</string>
     <key>CFBundleVersion</key>
-    <string>4</string>
+    <string>5</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.1</string>
+    <string>1.3.0</string>
     <key>CFBundleExecutable</key>
     <string>SlideWand</string>
     <key>CFBundlePackageType</key>
@@ -24,7 +24,8 @@
     <string>SlideWand uses the camera to detect hand gestures for changing slides. All processing happens on-device; no video ever leaves your Mac.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>LSUIElement</key>
-    <true/>
+    <!-- No LSUIElement: SlideWand is a regular Dock app. (A macOS 26 Tahoe
+         regression silently parks status items and windows of LSUIElement
+         apps — v1.2.x launched with no visible UI. Regular app = visible.) -->
 </dict>
 </plist>

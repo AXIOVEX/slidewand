@@ -11,7 +11,7 @@ A native macOS app (Swift + Apple's Vision framework). Hand tracking runs entire
 3. Grant **Camera** access when prompted.
 4. Grant **Accessibility**: System Settings → Privacy & Security → Accessibility → add **SlideWand**. macOS never prompts for this one — the app opens that Settings page for you on first run and shows a banner until it's granted. It starts working the moment you toggle it; no restart needed.
 
-SlideWand lives in your **menu bar** (👋 icon) — no Dock icon, no clutter. The camera preview window opens on launch so you can see what it sees; close it and the app keeps running from the menu bar.
+SlideWand is a regular Mac app (Dock icon) with an optional **menu bar** icon (👋) — on macOS 26 the OS sometimes fails to paint third-party menu-bar icons (a known Tahoe regression), so the Dock icon is the reliable home. The camera preview window opens on launch so you can see what it sees; close it and the app keeps running.
 
 ## Testing it
 
