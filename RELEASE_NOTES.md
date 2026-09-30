@@ -1,34 +1,41 @@
-# SlideWand v1.3.6 — Wand calibration
+# SlideWand v0.1.0
 
-Teach SlideWand which fingertip is the tip of your wand, and waves track
-the tip instead of the palm.
+Hand-gesture slide control for your Mac. Wave the tip of your wand
+← / → to change slides.
 
-## New in v1.3.6
+## What's in 0.1.0
 
-- **Calibrate Wand…** (menu bar): hold your hand up like a wand, tip pointing
-  up, and hold still for a couple of seconds. SlideWand learns which landmark
-  is the tip (e.g. your index fingertip) and saves it — calibration survives
-  restarts.
-- **Tip-tracked waves**: once calibrated, the motion trail, wave detection,
-  and hold steadiness all run off the wand tip, so quick flicks of the tip
-  drive next/previous. Without calibration the app falls back to palm tracking.
-- **Tip marker on the camera preview**: the calibrated tip gets a cyan
-  "TIP" marker so you can see exactly what the app is following.
-- **Steadiness + visibility checks**: calibration refuses a shaky capture or
-  one where the hand wasn't in view, and tells you to try again.
-- The gesture test window now shows wand state ("Wand: index fingertip ✓"
-  or "Wand: not calibrated").
+- **Wand calibration** ("Calibrate Wand…" in the menu): hold your hand up
+  like a wand, tip pointing up, hold still for a couple of seconds.
+  SlideWand learns which fingertip is the tip and tracks that point —
+  waves go off the tip and how it moves. A cyan TIP marker on the camera
+  preview shows what the app is following. Without calibration, waves track
+  the palm.
+- **Full menu bar**: SlideWand, File, View, Window, and Help menus,
+  including About SlideWand (with version info), Preferences, and
+  Grant Accessibility Access.
+- **Gesture test window**: live skeleton, trail, event log, camera +
+  accessibility + wand + version status.
+- **Preferences**: tuning sliders (swipe distance, hold time, cooldown,
+  min hand size) applied live, plus launch-at-login.
+- **Self-updater**: checks the public github.com releases page on launch
+  (6h throttle) and via the menu; downloads and installs with a relaunch
+  script. No GitHub API, no keys.
+- **Mirrored camera preview** (display-only transform — the capture
+  connection is never touched), on-device Vision hand tracking, arrow keys
+  via CGEvent.
 
-## Still true
+## Notes
 
-- Native Swift (Vision + AVFoundation), everything on-device, no dependencies.
-- Mirrored preview is display-only (Core Animation transform); the app never
-  touches `AVCaptureConnection` mirroring/rotation.
-- The self-updater uses only public github.com release/download URLs —
-  no GitHub API, no keys.
+- Native Swift, no dependencies, everything on-device.
+- Ad-hoc signed, not Apple-notarized: first launch needs right-click → Open.
+- Needs Camera and Accessibility permissions. After updating, if keys stop
+  working, toggle SlideWand off and on in
+  Settings → Privacy & Security → Accessibility (macOS ties the grant to
+  each new build's signature).
 
 ## Install / update
 
-Download **SlideWand-macos.zip** below, unzip, and replace
-`/Applications/SlideWand.app`. First launch: right-click → Open
-(the app is ad-hoc signed, not Apple-notarized).
+Download **SlideWand-macos.zip** below, unzip, quit any running SlideWand,
+replace `/Applications/SlideWand.app`, and launch. First launch:
+right-click → Open.

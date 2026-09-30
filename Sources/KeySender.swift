@@ -21,6 +21,15 @@ enum KeySender {
         return AXIsProcessTrusted()
     }
 
+    /// Shows macOS's native "would like to control this computer" prompt.
+    /// Call only from explicit user action — with the prompt option the
+    /// system dialogs on every call while untrusted.
+    @discardableResult
+    static func requestAccessibilityTrust() -> Bool {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(opts)
+    }
+
     static func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)

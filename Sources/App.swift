@@ -596,6 +596,9 @@ final class TestWindowController: NSWindowController {
         } else {
             statusParts.append("Wand: not calibrated")
         }
+        let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let bld = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        statusParts.append("v\(ver) (\(bld))")
         statusLabel.stringValue = statusParts.joined(separator: "   ·   ")
         statusLabel.textColor = (!wand.cameraRunning || !wand.accessibilityOK) ? .systemRed : .systemGreen
 
@@ -861,6 +864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusLineItem: NSMenuItem!
     private var previewItem: NSMenuItem!
+    private var previewMenuItem: NSMenuItem!
     private var previewWindow: NSWindow!
     private var controller: WandController!
     private var testController: TestWindowController!
@@ -874,13 +878,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v1.3.6)")
+        Log.line("didFinishLaunching: start (v0.1.0)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
         // status item and windows invisibly). The extra call hid all windows
         // on some systems.
         buildStatusItem()
+        buildMainMenu()
         Log.line("status item built")
         print("[SlideWand] status item built")
 
@@ -977,6 +982,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    /// Full main menu bar (File, View, Window, Help…). The app is a regular
+    /// Dock app, so it gets a real menu — the status-item menu alone isn't it.
+    private func buildMainMenu() {
+        let mainMenu = NSMenu()
+
+        func wired(_ item: NSMenuItem) -> NSMenuItem {
+            if item.action != nil { item.target = self }
+            return item
+        }
+
+        // App menu
+        let appMenu = NSMenu()
+        appMenu.addItem(wired(NSMenuItem(title: "About SlideWand", action: #selector(openAbout), keyEquivalent: "")))
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(wired(NSMenuItem(title: "Preferences…", action: #selector(openPrefs), keyEquivalent: ",")))
+        appMenu.addItem(wired(NSMenuItem(title: "Calibrate Wand…", action: #selector(openCalibrate), keyEquivalent: "")))
+        appMenu.addItem(wired(NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "")))
+        appMenu.addItem(wired(NSMenuItem(title: "Grant Accessibility Access…", action: #selector(grantAccessibility), keyEquivalent: "")))
+        appMenu.addItem(NSMenuItem.separator())
+        let quitItem = NSMenuItem(title: "Quit SlideWand", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // File menu
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(wired(NSMenuItem(title: "Open Gesture Test…", action: #selector(openTest), keyEquivalent: "")))
+        fileMenu.addItem(wired(NSMenuItem(title: "Close Window", action: #selector(closeFrontWindow), keyEquivalent: "w")))
+        let fileMenuItem = NSMenuItem()
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
+
+        // View menu
+        let viewMenu = NSMenu(title: "View")
+        previewMenuItem = wired(NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: ""))
+        viewMenu.addItem(previewMenuItem)
+        let viewMenuItem = NSMenuItem()
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
+
+        // Window menu
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Zoom", action: #selector(NSWindow.zoom(_:)), keyEquivalent: ""))
+        windowMenu.addItem(NSMenuItem.separator())
+        let frontItem = NSMenuItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        frontItem.target = NSApp
+        windowMenu.addItem(frontItem)
+        let windowMenuItem = NSMenuItem()
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
+
+        // Help menu
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(wired(NSMenuItem(title: "SlideWand on GitHub", action: #selector(openGitHub), keyEquivalent: "")))
+        let helpMenuItem = NSMenuItem()
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func openAbout() {
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .credits: NSAttributedString(string:
+                "Hand-gesture slide control for your Mac.\n\n" +
+                "Wave the tip of your wand ← / → to change slides.\n\n" +
+                "Native Swift · Vision + AVFoundation · everything on-device.\n" +
+                "Ad-hoc signed (not Apple-notarized).\n\n" +
+                "Tip: after updating, if keys stop working, toggle SlideWand " +
+                "off and on in Settings → Privacy & Security → Accessibility."),
+        ])
+    }
+
+    @objc private func grantAccessibility() {
+        if KeySender.requestAccessibilityTrust() {
+            controller.accessibilityOK = true
+            controller.refreshHUD()
+        } else {
+            KeySender.openAccessibilitySettings()
+        }
+    }
+
+    @objc private func closeFrontWindow() {
+        NSApp.keyWindow?.performClose(nil)
+    }
+
+    @objc private func openGitHub() {
+        if let url = URL(string: "https://github.com/AXIOVEX/slidewand") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     @objc private func updateMenu() {
         tickCount += 1
         if tickCount % 15 == 0 {
@@ -1029,6 +1130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePreview() {
         let vis = previewWindow.isVisible
         previewWindow.setIsVisible(!vis)
-        previewItem.title = vis ? "Show Camera Preview" : "Hide Camera Preview"
+        let title = vis ? "Show Camera Preview" : "Hide Camera Preview"
+        previewItem.title = title
+        previewMenuItem.title = title
     }
 }
