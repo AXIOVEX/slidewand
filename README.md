@@ -58,23 +58,29 @@ Or push a `v*` tag — GitHub Actions builds a universal (Apple Silicon + Intel)
 
 ## Tuning
 
-Constants live in `Sources/GestureEngine.swift` (`SwipeDetector`, `HoldDetector`) and `Sources/App.swift` (`minHandHeight`):
+**👋 → Preferences…** (⌘,) gives you sliders for everything — no rebuilding:
 
-- `minDx` (0.30) — smaller = shorter flicks trigger. In a tight room, try 0.22.
-- `holdTime` (1.0) — seconds of stillness for palm/fist triggers.
-- `cooldown` (1.0) — minimum seconds between slide changes.
-- `minHandHeight` (0.16) — raise to ignore people in the background.
+- **Swipe distance** (0.30) — smaller = shorter flicks trigger. In a tight room, try 0.22.
+- **Hold time** (1.0s) — seconds of stillness for palm/fist triggers.
+- **Cooldown** (1.0s) — minimum seconds between slide changes.
+- **Min hand size** (0.16) — raise to ignore people in the background.
+
+Changes apply instantly and are remembered. There's also an **Open SlideWand at login** checkbox.
+
+## Updates
+
+SlideWand checks for updates itself: on launch (at most once every 6 hours) and whenever you pick **👋 → Check for Updates…**. If a new release is on GitHub it asks once, then downloads it, swaps the app in place, and relaunches — that's the only network the app ever uses. If the install can't write where the app lives, it opens the downloaded copy in Finder instead so you can move it yourself.
 
 ## Troubleshooting
 
 - **Keys don't reach the slideshow** → Accessibility permission (step 4 above). The red banner in the preview tells you while it's blocked.
 - **"Could not open camera"** → another app (Zoom, Photo Booth) is using it; close it.
 - **Gestures not detected** → check the preview: is the hand skeleton drawn? More light helps; strong backlighting hurts.
-- **Slides advance twice** → slow down slightly between waves, or raise `cooldown`.
+- **Slides advance twice** → slow down slightly between waves, or raise Cooldown in Preferences.
 
 ## Privacy
 
-All processing is on-device. The camera feed is processed in memory and never saved, uploaded, or transmitted. The app makes zero network connections.
+All gesture processing is on-device. The camera feed is processed in memory and never saved, uploaded, or transmitted. The app's only network use is checking GitHub for new releases (api.github.com + the release download), only when it checks for updates.
 
 ## License
 

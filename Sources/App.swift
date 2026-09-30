@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import CoreGraphics
+import ServiceManagement
 
 // MARK: - HUD state + overlay drawing
 
@@ -215,7 +216,7 @@ final class WandController: NSObject, HandTrackerDelegate {
     private var axPrompted = false
     private var lastAxCheck: Double = 0
 
-    private let minHandHeight = 0.16
+    private var minHandSize: Double { Tuning.shared.minHandSize }
 
     override init() {
         preview = PreviewView(session: tracker.captureSession)
@@ -260,6 +261,12 @@ final class WandController: NSObject, HandTrackerDelegate {
 
     func handTracker(_ tracker: VisionHandTracker, didUpdate points: [Pt]?) {
         let now = ProcessInfo.processInfo.systemUptime
+
+        // Live tuning from the Preferences window — synced every frame, no restart needed.
+        swipe.minDx = Tuning.shared.swipeDistance
+        hold.holdTime = Tuning.shared.holdTime
+        gate.cooldown = Tuning.shared.cooldown
+
         let dt = now - prevT
         prevT = now
         if dt > 0 { fpsEma = 0.9 * fpsEma + 0.1 * (1.0 / dt) }
@@ -278,7 +285,7 @@ final class WandController: NSObject, HandTrackerDelegate {
 
         var gesture: Gesture = .unknown
         var cx = 0.0, cy = 0.0
-        let handOK = points.map { handHeight($0) >= minHandHeight } ?? false
+        let handOK = points.map { handHeight($0) >= minHandSize } ?? false
         if let pts = points, handOK {
             let c = palmCentroid(pts)
             cx = c.x; cy = c.y
@@ -478,6 +485,135 @@ final class TestWindowController: NSWindowController {
     }
 }
 
+// MARK: - Preferences window: tuning sliders + launch at login
+
+final class PreferencesWindowController: NSWindowController {
+    private struct Row {
+        let title: String
+        let min: Double
+        let max: Double
+        let format: (Double) -> String
+        let get: () -> Double
+        let set: (Double) -> Void
+    }
+
+    private var rows: [Row] = []
+    private var sliders: [NSSlider] = []
+    private var valueLabels: [NSTextField] = []
+    private var loginCheckbox: NSButton!
+
+    init() {
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 360),
+                           styleMask: [.titled, .closable],
+                           backing: .buffered,
+                           defer: false)
+        super.init(window: win)
+        win.title = "SlideWand Preferences"
+        win.isReleasedWhenClosed = false
+
+        rows = [
+            Row(title: "Swipe distance", min: 0.15, max: 0.45,
+                format: { String(format: "%.2f", $0) },
+                get: { Tuning.shared.swipeDistance },
+                set: { Tuning.shared.swipeDistance = $0 }),
+            Row(title: "Hold time", min: 0.5, max: 2.0,
+                format: { String(format: "%.1fs", $0) },
+                get: { Tuning.shared.holdTime },
+                set: { Tuning.shared.holdTime = $0 }),
+            Row(title: "Cooldown", min: 0.5, max: 2.0,
+                format: { String(format: "%.1fs", $0) },
+                get: { Tuning.shared.cooldown },
+                set: { Tuning.shared.cooldown = $0 }),
+            Row(title: "Min hand size", min: 0.08, max: 0.30,
+                format: { String(format: "%.2f", $0) },
+                get: { Tuning.shared.minHandSize },
+                set: { Tuning.shared.minHandSize = $0 }),
+        ]
+
+        let content = win.contentView!
+        var y: CGFloat = 300
+        for (i, row) in rows.enumerated() {
+            let title = NSTextField(labelWithString: row.title)
+            title.frame = NSRect(x: 20, y: y, width: 130, height: 20)
+            title.font = NSFont.systemFont(ofSize: 13)
+            content.addSubview(title)
+
+            let slider = NSSlider(value: row.get(), minValue: row.min, maxValue: row.max,
+                                  target: self, action: #selector(sliderChanged(_:)))
+            slider.frame = NSRect(x: 150, y: y - 2, width: 170, height: 24)
+            slider.tag = i
+            content.addSubview(slider)
+            sliders.append(slider)
+
+            let val = NSTextField(labelWithString: row.format(row.get()))
+            val.frame = NSRect(x: 326, y: y, width: 74, height: 20)
+            val.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+            content.addSubview(val)
+            valueLabels.append(val)
+
+            y -= 44
+        }
+
+        loginCheckbox = NSButton(checkboxWithTitle: "Open SlideWand at login",
+                                 target: self, action: #selector(loginToggled(_:)))
+        loginCheckbox.frame = NSRect(x: 20, y: 84, width: 380, height: 20)
+        content.addSubview(loginCheckbox)
+
+        let restore = NSButton(title: "Restore Defaults", target: self,
+                               action: #selector(restoreDefaults(_:)))
+        restore.frame = NSRect(x: 20, y: 44, width: 140, height: 28)
+        restore.bezelStyle = .rounded
+        content.addSubview(restore)
+
+        let hint = NSTextField(labelWithString: "Changes apply immediately — no restart needed.")
+        hint.frame = NSRect(x: 20, y: 16, width: 380, height: 16)
+        hint.font = NSFont.systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        content.addSubview(hint)
+
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    func show() {
+        refresh()
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func refresh() {
+        for (i, row) in rows.enumerated() {
+            sliders[i].doubleValue = row.get()
+            valueLabels[i].stringValue = row.format(row.get())
+        }
+        loginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    @objc private func sliderChanged(_ sender: NSSlider) {
+        let row = rows[sender.tag]
+        let v = (sender.doubleValue * 100).rounded() / 100
+        row.set(v)
+        valueLabels[sender.tag].stringValue = row.format(v)
+    }
+
+    @objc private func loginToggled(_ sender: NSButton) {
+        do {
+            if sender.state == .on { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            // Fall through; the checkbox is reset to reality below.
+        }
+        loginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    @objc private func restoreDefaults(_ sender: NSButton) {
+        Tuning.shared.restoreDefaults()
+        refresh()
+    }
+}
+
 // MARK: - App bootstrap: menu-bar app + preview window + test window
 
 @main
@@ -488,6 +624,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var previewWindow: NSWindow!
     private var controller: WandController!
     private var testController: TestWindowController!
+    private var prefsController: PreferencesWindowController!
+    private var transientStatus: String? = nil
     private var menuTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -496,6 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         controller = WandController()
         testController = TestWindowController(wand: controller)
+        prefsController = PreferencesWindowController()
 
         previewWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
                                 styleMask: [.titled, .closable, .miniaturizable],
@@ -531,6 +670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          selector: #selector(updateMenu),
                                          userInfo: nil, repeats: true)
         updateMenu()
+        Updater.shared.checkAutomatically()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -551,14 +691,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLineItem.isEnabled = false
         menu.addItem(statusLineItem)
         menu.addItem(NSMenuItem(title: "Open Gesture Test…", action: #selector(openTest), keyEquivalent: "t"))
+        menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPrefs), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: ""))
         previewItem = NSMenuItem(title: "Hide Camera Preview", action: #selector(togglePreview), keyEquivalent: "p")
         menu.addItem(previewItem)
-        menu.addItem(NSMenuItem.separatorItem())
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit SlideWand", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
     @objc private func updateMenu() {
+        if let t = transientStatus {
+            statusLineItem.title = t
+            return
+        }
         guard controller != nil else { return }
         let cam: String
         if controller.cameraRunning {
@@ -578,6 +724,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openTest() {
         testController.show()
+    }
+
+    @objc private func openPrefs() {
+        prefsController.show()
+    }
+
+    @objc private func checkUpdates() {
+        Updater.shared.check(interactive: true)
+    }
+
+    /// Transient one-line status (e.g. "Downloading update…") shown in place of
+    /// the normal camera/key line until cleared with nil.
+    func setTransientStatus(_ s: String?) {
+        transientStatus = s
+        updateMenu()
     }
 
     @objc private func togglePreview() {

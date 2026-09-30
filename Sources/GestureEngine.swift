@@ -51,7 +51,7 @@ func handHeight(_ lm: [Pt]) -> Double {
 // MARK: - Swipe detector: fast horizontal hand motion in a sliding window
 
 final class SwipeDetector {
-    let minDx = 0.30
+    var minDx = 0.30
     let maxDy = 0.22
     let minDur = 0.10
     let maxDur = 0.55
@@ -95,7 +95,7 @@ final class SwipeDetector {
 // MARK: - Hold detector: dwell on a steady open palm / fist
 
 final class HoldDetector {
-    let holdTime = 1.0
+    var holdTime = 1.0
     let moveTol = 0.06
 
     private var gesture: Gesture?
@@ -130,7 +130,7 @@ final class HoldDetector {
 // MARK: - Trigger gate: one action per cooldown window
 
 final class TriggerGate {
-    let cooldown = 1.0
+    var cooldown = 1.0
     private var last: Double = -1e9
 
     func ready(_ t: Double) -> Bool { return t - last >= cooldown }
