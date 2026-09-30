@@ -19,6 +19,9 @@ struct HudState {
     var accessibilityOK: Bool = true
     var notice: String? = nil
     var tipIndex: Int? = nil
+    var calibrating: Bool = false
+    var calibrationProgress: Double = 0
+    var calibrationHint: String = ""
 }
 
 private let skeletonChains = [
@@ -99,6 +102,59 @@ final class OverlayView: NSView {
                 path.lineWidth = 3
                 path.stroke()
             }
+        }
+
+        // Calibration guidance overlay: where to put the wand + what to do
+        if hud.calibrating {
+            NSColor.black.withAlphaComponent(0.5).setFill()
+            NSBezierPath(rect: NSRect(x: vx, y: vy, width: vw, height: vh)).fill()
+
+            // Target box: hold the wand in here
+            let bw: CGFloat = 280, bh: CGFloat = 340
+            let bx = vx + (vw - bw) / 2, by = vy + (vh - bh) / 2 - 10
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            let box = NSBezierPath(roundedRect: NSRect(x: bx, y: by, width: bw, height: bh),
+                                   xRadius: 14, yRadius: 14)
+            box.lineWidth = 2.5
+            box.setLineDash([10, 7], count: 2, phase: 0)
+            box.stroke()
+
+            // Up arrow: tip points up
+            let ax = bx + bw / 2
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            let arrow = NSBezierPath()
+            arrow.move(to: CGPoint(x: ax, y: by + 60))
+            arrow.line(to: CGPoint(x: ax, y: by + 150))
+            arrow.move(to: CGPoint(x: ax - 16, y: by + 128))
+            arrow.line(to: CGPoint(x: ax, y: by + 152))
+            arrow.line(to: CGPoint(x: ax + 16, y: by + 128))
+            arrow.lineWidth = 4
+            arrow.lineCapStyle = .round
+            arrow.stroke()
+            text("TIP UP", at: CGPoint(x: ax - 32, y: by + 30), size: 15,
+                 color: .white, bold: true)
+
+            // Live tip dot: what the app currently thinks the tip is
+            if let pts = hud.points, hud.handOK,
+               let top = pts.enumerated().min(by: { $0.element.y < $1.element.y }) {
+                NSColor.yellow.setFill()
+                NSBezierPath(ovalIn: NSRect(x: X(top.element.x) - 8, y: Y(top.element.y) - 8,
+                                            width: 16, height: 16)).fill()
+            }
+
+            // Instruction + progress
+            text(hud.calibrationHint, at: CGPoint(x: bx + 18, y: by + bh + 12), size: 14,
+                 color: .white, bold: true)
+            text("Don't wave yet — just hold still.", at: CGPoint(x: bx + 18, y: by - 24),
+                 size: 12, color: .lightGray)
+            let pbw = bw - 36
+            NSColor.darkGray.setFill()
+            NSBezierPath(roundedRect: NSRect(x: bx + 18, y: by - 48, width: pbw, height: 12),
+                         xRadius: 6, yRadius: 6).fill()
+            NSColor.systemGreen.setFill()
+            NSBezierPath(roundedRect: NSRect(x: bx + 18, y: by - 48,
+                                             width: pbw * CGFloat(hud.calibrationProgress), height: 12),
+                         xRadius: 6, yRadius: 6).fill()
         }
 
         // Distance meter ("too far" hint)
@@ -236,9 +292,14 @@ final class WandController: NSObject, HandTrackerDelegate {
     var calibrating = false
     var calibrationMessage: String? = nil
     private var calFrames: [[Pt]] = []
+    private var calFresh: [[Bool]] = []
     private var calTipTrail: [Pt] = []
     private var calDeadline: Double = 0
     private let calDuration = 2.5
+    /// Calibration is more forgiving about hand size than gesture detection —
+    /// frames are averaged and steadiness-checked anyway.
+    private let calMinHandSize = 0.10
+    private var lastCalSawHand = false
 
     private var minHandSize: Double { Tuning.shared.minHandSize }
 
@@ -293,12 +354,21 @@ final class WandController: NSObject, HandTrackerDelegate {
     /// Begin a calibration capture: hold the wand up, tip pointing up, steady.
     func startCalibration() {
         calFrames.removeAll()
+        calFresh.removeAll()
         calTipTrail.removeAll()
         calibrationMessage = nil
+        lastCalSawHand = false
         calibrating = true
         calDeadline = ProcessInfo.processInfo.systemUptime + calDuration
         gestureLabel = "calibrating — hold your wand still…"
         swipe.reset(); hold.reset(); trail.removeAll()
+    }
+
+    /// Live hint for the calibration window + preview overlay.
+    var calibrationHint: String {
+        guard calibrating else { return "" }
+        return lastCalSawHand ? "I see your wand — hold it still…"
+                              : "Show your wand to the camera…"
     }
 
     func cancelCalibration() {
@@ -312,9 +382,11 @@ final class WandController: NSObject, HandTrackerDelegate {
         calibrationMessage = nil
     }
 
-    private func captureCalibrationFrame(now: Double, points: [Pt]?, handOK: Bool) {
+    private func captureCalibrationFrame(now: Double, points: [Pt]?, handOK: Bool, fresh: [Bool]) {
+        lastCalSawHand = points != nil && handOK
         if let pts = points, handOK {
             calFrames.append(pts)
+            calFresh.append(fresh)
             if let top = pts.enumerated().min(by: { $0.element.y < $1.element.y }) {
                 calTipTrail.append(top.element)
             }
@@ -350,6 +422,14 @@ final class WandController: NSObject, HandTrackerDelegate {
         let wander = xRange + yRange
         guard wander < 0.18 else {
             calibrationMessage = "Too shaky — hold your wand still and try again."
+            gestureLabel = "wave quickly ← / →"
+            return
+        }
+        // The tip must have been genuinely seen (not a remembered position)
+        // in at least half the frames.
+        let tipFreshCount = calFresh.filter { $0[tipEntry.offset] }.count
+        guard Double(tipFreshCount) >= 0.5 * Double(calFrames.count) else {
+            calibrationMessage = "I couldn't get a clear look at the tip — point it toward the camera and try again."
             gestureLabel = "wave quickly ← / →"
             return
         }
@@ -398,8 +478,12 @@ final class WandController: NSObject, HandTrackerDelegate {
         let handOK = points.map { handHeight($0) >= minHandSize } ?? false
         if calibrating {
             // Learning the wand tip — gesture detection is paused meanwhile.
-            captureCalibrationFrame(now: now, points: points, handOK: handOK)
-            render(points: points, handOK: handOK)
+            // Calibration is more forgiving about hand size; frames are
+            // averaged and steadiness-checked anyway.
+            let calOK = points.map { handHeight($0) >= calMinHandSize } ?? false
+            captureCalibrationFrame(now: now, points: points, handOK: calOK,
+                                    fresh: tracker.jointFresh)
+            render(points: points, handOK: calOK)
             return
         }
         if let pts = points, handOK {
@@ -483,6 +567,9 @@ final class WandController: NSObject, HandTrackerDelegate {
         hud.accessibilityOK = accessibilityOK
         hud.notice = notice
         hud.tipIndex = calibration?.tipIndex
+        hud.calibrating = calibrating
+        hud.calibrationProgress = calibrationProgress
+        hud.calibrationHint = calibrationHint
         overlay.render(hud)
     }
 }
@@ -697,7 +784,7 @@ final class CalibrationWindowController: NSWindowController {
         guard let wand = wand else { return }
         if wand.calibrating {
             progress.doubleValue = wand.calibrationProgress
-            statusLabel.stringValue = "Hold still… learning your wand tip."
+            statusLabel.stringValue = wand.calibrationHint
             statusLabel.textColor = .labelColor
             startButton.isEnabled = false
         } else {
@@ -877,7 +964,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v0.1.1)")
+        Log.line("didFinishLaunching: start (v0.1.2)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the

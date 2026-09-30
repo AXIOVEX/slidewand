@@ -29,6 +29,14 @@ final class VisionHandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 
     var captureSession: AVCaptureSession { return session }
 
+    /// Per-joint remembered positions: a joint that dips below the confidence
+    /// threshold keeps its last good position instead of nuking the whole
+    /// frame. Fist-like wand grips always have curled/occluded joints, so the
+    /// old all-or-nothing gate meant those frames never arrived at all.
+    private var remembered: [Pt?] = Array(repeating: nil, count: 21)
+    /// Freshness of each joint in the most recently delivered frame.
+    private(set) var jointFresh: [Bool] = Array(repeating: false, count: 21)
+
     func start() throws {
         session.beginConfiguration()
         session.sessionPreset = .vga640x480
@@ -77,34 +85,45 @@ final class VisionHandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         do {
             try handler.perform([request])
             guard let obs = request.results?.first as? VNHumanHandPoseObservation else {
-                notify(nil)
+                remembered = Array(repeating: nil, count: 21)
+                notify(nil, fresh: Array(repeating: false, count: 21))
                 return
             }
             let recognized = try obs.recognizedPoints(.all)
-            var lm: [Pt] = []
+            var lm: [Pt?] = []
             lm.reserveCapacity(21)
-            var confident = 0
-            for joint in joints {
-                guard let p = recognized[joint], p.confidence >= 0.2 else {
-                    notify(nil)
-                    return
+            var fresh = [Bool](repeating: false, count: 21)
+            for (i, joint) in joints.enumerated() {
+                if let p = recognized[joint], p.confidence >= 0.2 {
+                    // Vision: origin bottom-left, x grows to the subject's left on a
+                    // front camera. Convert to engine convention: user's right = +x,
+                    // top-left origin (matches the mirrored preview).
+                    let pt = Pt(x: 1.0 - Double(p.location.x),
+                                y: 1.0 - Double(p.location.y))
+                    lm.append(pt)
+                    remembered[i] = pt
+                    fresh[i] = true
+                } else {
+                    lm.append(remembered[i])
                 }
-                // Vision: origin bottom-left, x grows to the subject's left on a
-                // front camera. Convert to engine convention: user's right = +x,
-                // top-left origin (matches the mirrored preview).
-                lm.append(Pt(x: 1.0 - Double(p.location.x),
-                             y: 1.0 - Double(p.location.y)))
-                if p.confidence >= 0.3 { confident += 1 }
             }
-            notify(confident >= 15 ? lm : nil)
+            // Deliver the frame when the wrist anchor plus most of the hand is
+            // known; never-seen joints fall back to the wrist position.
+            let knownCount = lm.compactMap { $0 }.count
+            guard let wrist = lm[0], knownCount >= 14 else {
+                notify(nil, fresh: Array(repeating: false, count: 21))
+                return
+            }
+            notify(lm.map { $0 ?? wrist }, fresh: fresh)
         } catch {
-            notify(nil)
+            notify(nil, fresh: Array(repeating: false, count: 21))
         }
     }
 
-    private func notify(_ points: [Pt]?) {
+    private func notify(_ points: [Pt]?, fresh: [Bool]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.jointFresh = fresh
             self.delegate?.handTracker(self, didUpdate: points)
         }
     }

@@ -1,4 +1,20 @@
-# SlideWand v0.1.1
+# SlideWand v0.1.2
+
+## What's new in v0.1.2
+
+- **Calibration actually sees fist-like wand grips.** The hand tracker used to
+  throw away the entire frame if any single one of the 21 joints read
+  low-confidence — and a wand grip always has curled, low-confidence joints.
+  Now each joint keeps its last good position instead, so those frames arrive
+  and calibration can learn the tip. The learned tip must still be genuinely
+  seen (not remembered) in at least half the frames.
+- **Calibration guidance overlay on the video**: while calibrating, the
+  preview dims and shows a dashed target box (hold the wand in here), a
+  TIP UP arrow, a live yellow dot on what the app currently thinks the tip
+  is, the instruction ("I see your wand — hold it still…" /
+  "Show your wand to the camera…"), and a progress bar.
+- Calibration is more forgiving about hand size than gesture detection
+  (frames are averaged and steadiness-checked anyway).
 
 ## What's new in v0.1.1
 
