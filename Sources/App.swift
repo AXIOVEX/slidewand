@@ -615,8 +615,8 @@ final class PreferencesWindowController: NSWindowController {
 }
 
 // MARK: - App bootstrap: menu-bar app + preview window + test window
+// NOTE: entry point is Sources/main.swift (explicit delegate wiring).
 
-@main
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusLineItem: NSMenuItem!
@@ -630,15 +630,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tickCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
-        Log.line("didFinishLaunching: start (v1.2.1)")
+        print("[SlideWand] log path: \(Log.url.path)")
+        Log.line("didFinishLaunching: start (v1.3.1)")
+        print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — LSUIElement in Info.plist already
         // makes this a menu-bar app; the extra call hid all windows on some systems.
         buildStatusItem()
         Log.line("status item built")
+        print("[SlideWand] status item built")
 
         controller = WandController()
         Log.line("WandController created")
+        print("[SlideWand] WandController created")
         testController = TestWindowController(wand: controller)
         prefsController = PreferencesWindowController()
         Log.line("test + prefs controllers created")
@@ -655,9 +660,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the preview window can't end up behind other apps or unpainted.
         NSApp.activate(ignoringOtherApps: true)
         Log.line("preview shown: isVisible=\(previewWindow.isVisible) appWindows=\(NSApp.windows.count) active=\(NSApp.isActive)")
+        print("[SlideWand] preview shown: isVisible=\(previewWindow.isVisible) windows=\(NSApp.windows.count) active=\(NSApp.isActive)")
 
         let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
         Log.line("camera auth status: \(authStatus.rawValue)")
+        print("[SlideWand] camera auth status: \(authStatus.rawValue)")
         switch authStatus {
         case .authorized:
             controller.start()
@@ -684,6 +691,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          userInfo: nil, repeats: true)
         updateMenu()
         Updater.shared.checkAutomatically()
+        print("[SlideWand] startup complete")
+        Log.line("startup complete")
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

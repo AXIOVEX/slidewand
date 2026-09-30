@@ -1,58 +1,9 @@
-## SlideWand v1.3.0 — regular Dock app (fixes invisible launch on macOS 26)
+# SlideWand 1.3.1
 
-### What changed
+## What changed
+- **Explicit app bootstrap** (`Sources/main.swift`): the delegate is now wired by hand instead of relying on `@main` synthesis — removes all doubt about the launch path.
+- **Loud startup diagnostics**: the app now prints each startup stage to stdout (`[SlideWand] ...`), so running the binary directly in Terminal shows exactly how far launch gets. Log path and log-write success are printed too.
+- Version 1.3.1 (build 6). Still a regular Dock app; still not Apple-notarized (right-click → Open on first launch).
 
-- SlideWand is a regular Mac app again (Dock icon, normal activation) instead of
-  menu-bar-only. A macOS 26 Tahoe regression silently parks the status items
-  and windows of `LSUIElement` apps — v1.2.x launched with no visible UI at all
-  on affected systems. The menu-bar icon is still there when the OS paints it,
-  but the Dock icon is now the reliable home.
-- The preview window explicitly activates the app on launch so it always comes
-  forward.
-- Launch diagnostics now write to `~/Library/Logs/SlideWand.log`.
-
-Everything from v1.2.x is included: Gesture Test window, Preferences with live
-tuning sliders, launch-at-login, and self-updates from GitHub releases.
-
----
-
-## SlideWand v1.2.1 — launch-window fix + diagnostics
-
-### What's new
-
-- Fixed: on some systems v1.2.0 launched with no visible windows. The redundant `setActivationPolicy(.accessory)` call (already covered by `LSUIElement` in Info.plist) has been removed.
-- Added launch diagnostics: the app now writes `/tmp/SlideWand.log` with its startup progress, so any future launch issue can be diagnosed from the log.
-
-Everything from v1.2.0 is included: menu-bar app, Gesture Test window, Preferences with live tuning sliders, launch-at-login, and self-updates from GitHub releases.
-
----
-
-### What's new
-
-- **Preferences window** (👋 → Preferences…, or ⌘,): sliders for swipe distance, hold time, cooldown, and minimum hand size — all apply instantly, no rebuild, no restart. Plus an **Open SlideWand at login** checkbox and a Restore Defaults button. Settings persist between launches.
-- **Self-updates**: SlideWand now checks GitHub releases on launch (at most once every 6 hours) and on demand via 👋 → Check for Updates…. One click downloads the new release, swaps the app in place, and relaunches. That's the only network the app ever uses.
-- **Menu-bar app** (new since v1.0.0): SlideWand lives in the menu bar (👋 icon) with no Dock icon. The camera preview is a window you can close — the app keeps running. The menu icon turns red if the camera is off or Accessibility is blocking keys.
-- **Gesture Test window** (👋 → Open Gesture Test…): watch your live hand state, big NEXT/PREV flashes, running counters, and a timestamped event log. Every trigger also presses a real arrow key, so you can verify it end to end.
-- Fixed: the preview window drew nothing until the first camera frame arrived, so a slow camera start looked like an empty window. It now renders its HUD immediately and shows "Waiting for camera permission…" while macOS prompts.
-
-### Install
-
-1. Download **`SlideWand-macos.zip`** below and unzip it.
-2. **Right-click `SlideWand.app` → Open** (one time only — not Apple-notarized yet, so Gatekeeper needs the manual OK; after that it opens normally). If macOS still refuses: `xattr -dr com.apple.quarantine /path/to/SlideWand.app`
-3. Grant **Camera** when prompted.
-4. Grant **Accessibility**: System Settings → Privacy & Security → Accessibility → add **SlideWand**. The app opens that page for you on first run.
-
-Requires macOS 14 or later.
-
-### Gestures
-
-| Do this | Happens |
-|---|---|
-| Wave hand quickly to **your right** | Next slide → |
-| Wave hand quickly to **your left** | ← Previous slide |
-| Hold an **open palm** still ~1 sec | Next slide → |
-| Hold a **closed fist** still ~1 sec | ← Previous slide |
-
-### Privacy
-
-Everything runs on-device with Apple's Vision framework. The camera feed is processed in memory and never saved, uploaded, or transmitted. The only network the app makes is checking github.com/AXIOVEX/slidewand for new releases.
+## Install
+Download `SlideWand-macos.zip` below, unzip, move `SlideWand.app` to `/Applications`, then right-click → Open (first launch only).
