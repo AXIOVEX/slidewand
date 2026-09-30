@@ -490,8 +490,9 @@ final class WandController: NSObject, HandTrackerDelegate {
                 findStable.removeAll { now - $0.1 > 1.2 }
                 if let first = findStable.first, now - first.1 >= 1.2 {
                     let xs = findStable.map { $0.0.x }, ys = findStable.map { $0.0.y }
-                    let wander = (xs.max() ?? 0) - (xs.min() ?? 0) + (ys.max() ?? 0) - (ys.min() ?? 0)
-                    if wander < 0.08 { beginRotateStep(.rotateLeft, now: now) }
+                    let xWander = (xs.max() ?? 0.0) - (xs.min() ?? 0.0)
+                    let yWander = (ys.max() ?? 0.0) - (ys.min() ?? 0.0)
+                    if xWander + yWander < 0.08 { beginRotateStep(.rotateLeft, now: now) }
                 }
             } else {
                 findStable.removeAll()
@@ -547,10 +548,11 @@ final class WandController: NSObject, HandTrackerDelegate {
                 }
             }
             if let s = wandSmooth {
-                pick = scored.min(by: {
-                    hypot($0.tip.x - s.x, $0.tip.y - s.y) < hypot($1.tip.x - s.x, $1.tip.y - s.y)
-                })
-                if let p = pick, hypot(p.tip.x - s.x, p.tip.y - s.y) > 0.3 { pick = nil }
+                func tipDist(_ c: WandCandidate) -> Double {
+                    hypot(c.tip.x - s.x, c.tip.y - s.y)
+                }
+                pick = scored.min(by: { tipDist($0) < tipDist($1) })
+                if let p = pick, tipDist(p) > 0.3 { pick = nil }
             } else {
                 pick = scored.max(by: { $0.length < $1.length })
             }
@@ -1111,7 +1113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[SlideWand] didFinishLaunching ENTER")
         Log.reset()
         print("[SlideWand] log path: \(Log.url.path)")
-        Log.line("didFinishLaunching: start (v0.2.0)")
+        Log.line("didFinishLaunching: start (v0.2.1)")
         print("[SlideWand] log exists after write: \(FileManager.default.fileExists(atPath: Log.url.path))")
         // NOTE: no setActivationPolicy call — this is a regular Dock app
         // (LSUIElement was removed in v1.3.0; on macOS 26 it parked the
